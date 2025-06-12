@@ -3,8 +3,8 @@ from pathlib import Path
 from langchain.vectorstores import Chroma
 from langchain.embeddings.base import Embeddings
 
-from RAG_Pipeline.data_loader import load_df
-from RAG_Pipeline.doc_builder import build_paragraph_docs
+from RAG_Pipeline.data_loader import load_documents
+from RAG_Pipeline.doc_builder import build_case_paragraph_docs
 from RAG_Pipeline.title_index import TitleIndex
 from RAG_Pipeline.vector_store import VectorStoreManager
 
@@ -31,15 +31,13 @@ class RAGPipeline:
 
     # ------------------------------------------------------------------ #
     def initialise(self):
-        df = load_df(self.dataset_path)
-        self.title_index = TitleIndex.from_df(df)
-
-        docs = build_paragraph_docs(
+        df = load_documents(self.dataset_path)
+        docs = build_case_paragraph_docs(
             df,
             citing_cols=self.col_map.get("citing"),
             cited_cols=self.col_map.get("cited"),
+            filter_empty=True,
         )
-
         vs_manager = VectorStoreManager(
             persist_dir   = self.persist_dir,
             embedding     = self.embedding,

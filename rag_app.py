@@ -1636,7 +1636,7 @@ def _setup_rag(file_obj, persist_dir):
         dataset_path  = tmp_path,
         persist_dir   = Path(persist_dir),
         embedding     = embed_obj,
-        k             = 4,               # or pull from a slider if you add one
+        k             = 7,               # or pull from a slider if you add one
         force_rebuild = False,
         col_map       = col_map,
     )
@@ -1677,48 +1677,90 @@ def rag_query_interface(selected_provider: str,
             chain_type="stuff",
             retriever=st.session_state.rag_retriever,
             chain_type_kwargs=dict(prompt=_rag_prompt(response_type)),
+            return_source_documents=True
         )
         # Get both answer and context
-        result = chain({"query": question, "return_source_documents": True})
+        with st.spinner("Generating answer..."):
+            result = chain({"query": question})
         answer = result["result"]
-        # You may need to extract the context string from the source documents:
-        context = "\n".join([doc.page_content for doc in result.get("source_documents", [])])
+        source_docs = result.get("source_documents", [])
+       # Debug information
+        st.write(f"Debug: Found {len(source_docs)} source documents")
+        if source_docs:
+            st.write("Debug: First doc metadata:", source_docs[0].metadata)
+        
+        # Build context from retrieved documents
+        context = "\n\n".join([doc.page_content for doc in source_docs])
 
+        # --- Show metadata of retrieved cases ---
+        if source_docs:
+            st.markdown("#### Retrieved Case Metadata")
+            meta_rows = []
+            for i, doc in enumerate(source_docs):
+                meta = doc.metadata
+                meta_rows.append({
+                    "Doc #": i + 1,
+                    "CELEX_ID": meta.get("celex", "N/A"),
+                    "Title": meta.get("case_title", "N/A"),
+                    "Date": meta.get("date", "N/A"),
+                    "Paragraph": meta.get("para_no", "N/A"),
+                    "Role": meta.get("role", "N/A")
+                })
+            st.table(meta_rows)
+        else:
+            st.warning("⚠️ No documents were retrieved for this query.")
+
+
+         # Show context
+        st.markdown("#### Retrieved Context")
+        if context:
+            st.text_area("Context from retrieved documents:", context, height=200)
+        else:
+            st.warning("No context was retrieved.")
+
+        # Show answer
         st.markdown("#### Answer")
         st.write(answer)
 
         # Validate citations
-        invalid_cites = validate_citations(answer, context)
-        if invalid_cites:
-            st.warning(
-                f"⚠️ The following citations in the answer are NOT present in the retrieved context: {invalid_cites}\n"
-                "This may indicate hallucination or improper grounding."
-            )
+        if context:
+            invalid_cites = validate_citations(answer, context)
+            if invalid_cites:
+                st.warning(
+                    f"⚠️ The following citations in the answer are NOT present in the retrieved context: {invalid_cites}\n"
+                    "This may indicate hallucination or improper grounding."
+                )
+            else:
+                st.success("✅ All citations in the answer are present in the context.")
         else:
-            st.success("✅ All citations in the answer are present in the context.")
+            st.error("❌ Cannot validate citations - no context retrieved.")
+
 
 def _rag_prompt(style):
     """
-    Returns a PromptTemplate that instructs the LLM to only cite from the provided context,
-    to avoid explicit statements about missing context, and to write answers as a single, well-structured paragraph.
+    Returns a PromptTemplate that instructs the LLM to answer using only the information in <context>, referencing case titles and paraphrasing as needed. No explicit citation format, no mention of missing context, and answers should be a single, well-structured paragraph.
     """
     if style == "detailed":
         tmpl = (
             "You are an EU-law specialist. Answer the following question using only the information provided in <context> below. "
-            "Whenever you cite a legal passage, you MUST only cite paragraphs and CELEX IDs that appear in <context>. "
-            "Do NOT invent or guess citations. If the context does not cover a point, answer as best you can without mentioning the absence of information. "
-            "Write your answer in a coherent, well-structured manner, naturally incorporating relevant legal principles, background, and exceptions as appropriate. "
-            "Cite using the format: (CELEX_ID:PARA_NO) — e.g. (62013CJ0196:113). "
-            "If you quote or paraphrase, always cite immediately after the sentence."
+            "Reference the relevant case titles naturally in your answer, paraphrasing the provided paragraphs as needed. "
+            "Do NOT invent or guess information. If the context does not cover a point, answer as best you can without mentioning the absence of information. "
+            "Write your answer in a coherent, well-structured paragraphs, incorporating relevant legal principles, background, and exceptions as appropriate. "
+            "Do not use any citation format or CELEX IDs—refer only to case titles in quotation marks. "
+            "\n\nExample context:\n[Commission v Greece]\nThe Greek government failed to fulfill its obligations...\n[Some Previous Case]\nRelevant legal background..."
+            "\nExample Q: What obligations did Greece fail to fulfill?"
+            "\nExample A: In 'Commission v Greece', the Greek government failed to fulfill its obligations as described in the provided context. This is further supported by the background from Some Previous Case, which clarifies the requirements."
             "\n\n<context>\n{context}\n\nQ: {question}\nA:"
         )
     else:
         tmpl = (
             "You are an EU-law expert. Provide a concise, authoritative answer using only the information in <context>. "
-            "You MUST only cite paragraphs and CELEX IDs that appear in <context}. "
-            "Do NOT invent or guess citations. If the context does not cover a point, answer as best you can without mentioning the absence of information. "
-            "Write your answer as a single, clear paragraph. "
-            "Cite using the format: (CELEX_ID:PARA_NO). Use a maximum of two citations unless strictly necessary."
+            "Reference case titles naturally in your answer, paraphrasing as needed. "
+            "Do NOT invent or guess information. If the context does not cover a point, answer as best you can without mentioning the absence of information. "
+            "Write your answer as a single, clear paragraph. Do not use any citation format or CELEX IDs—refer only to case titles. "
+            "\n\nExample context:\n[Commission v Greece]\nThe Greek government failed to fulfill its obligations...\n[Some Previous Case]\nRelevant legal background..."
+            "\nExample Q: What obligations did Greece fail to fulfill?"
+            "\nExample A: In Commission v Greece, the Greek government failed to fulfill its obligations as described in the provided context. This is further supported by the background from Some Previous Case."
             "\n\n<context>\n{context}\n\nQ: {question}\nA:"
         )
     from langchain.prompts import PromptTemplate
@@ -1726,6 +1768,23 @@ def _rag_prompt(style):
         input_variables=["context", "question"],
         template=tmpl,
     )
+
+# Additional debugging function you can add
+def debug_retriever():
+    """Debug function to test if retriever is working"""
+    if st.session_state.rag_retriever is None:
+        st.error("No retriever found")
+        return
+    
+    test_query = "test query"
+    try:
+        docs = st.session_state.rag_retriever.get_relevant_documents(test_query)
+        st.write(f"Retriever test: Found {len(docs)} documents")
+        if docs:
+            st.write("First doc content:", docs[0].page_content[:200])
+            st.write("First doc metadata:", docs[0].metadata)
+    except Exception as e:
+        st.error(f"Retriever error: {e}")
 
 def extract_citations(text):
     """

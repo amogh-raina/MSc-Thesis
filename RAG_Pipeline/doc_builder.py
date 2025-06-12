@@ -211,3 +211,59 @@ def build_docs_for_ecj_dataset(
         cited_cols=_DEFAULT_CITED,
         filter_empty=filter_empty
     )
+
+def build_case_paragraph_docs(
+    df: pd.DataFrame,
+    citing_cols: Dict[str, str] | None = None,
+    cited_cols: Dict[str, str] | None = None,
+    filter_empty: bool = True,
+) -> list[Document]:
+    """
+    Build one Document per unique (celex, para_no) pair for both citing and cited sides.
+    Content: [case_title]\nPARAGRAPH_TEXT
+    Metadata: celex, date, para_no, case_title
+    """
+    citing_cols = {**_DEFAULT_CITING, **(citing_cols or {})}
+    cited_cols = {**_DEFAULT_CITED, **(cited_cols or {})}
+    seen = set()
+    docs = []
+    for row in df.itertuples(index=False):
+        # Citing side
+        celex = _row_val(row, citing_cols["celex"])
+        para = _row_val(row, citing_cols["para"])
+        title = _row_val(row, citing_cols["title"])
+        date = _row_val(row, citing_cols.get("date"))
+        text = _row_val(row, citing_cols["text"])
+        key = (celex, para)
+        if celex and para and key not in seen and text.strip():
+            seen.add(key)
+            content = f"[{title}]\n{text.strip()}"
+            docs.append(Document(
+                page_content=content,
+                metadata={
+                    "celex": celex,
+                    "para_no": para,
+                    "case_title": title,
+                    "date": date,
+                }
+            ))
+        # Cited side
+        celex = _row_val(row, cited_cols["celex"])
+        para = _row_val(row, cited_cols["para"])
+        title = _row_val(row, cited_cols["title"])
+        date = _row_val(row, cited_cols.get("date"))
+        text = _row_val(row, cited_cols["text"])
+        key = (celex, para)
+        if celex and para and key not in seen and text.strip():
+            seen.add(key)
+            content = f"[{title}]\n{text.strip()}"
+            docs.append(Document(
+                page_content=content,
+                metadata={
+                    "celex": celex,
+                    "para_no": para,
+                    "case_title": title,
+                    "date": date,
+                }
+            ))
+    return docs
