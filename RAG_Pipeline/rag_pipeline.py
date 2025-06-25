@@ -1,6 +1,6 @@
 from __future__ import annotations
 from pathlib import Path
-from langchain.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain.embeddings.base import Embeddings
 
 from RAG_Pipeline.data_loader import load_documents

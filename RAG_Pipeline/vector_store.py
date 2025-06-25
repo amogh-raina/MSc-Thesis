@@ -2,7 +2,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import List
 
-from langchain.vectorstores import Chroma
+from langchain_chroma import Chroma
 from langchain.schema import Document
 from langchain.embeddings.base import Embeddings
 

@@ -18,6 +18,11 @@ import torch
 import shutil  
 import re
 
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_PROJECT"] = "MSc_Thesis"
+os.environ["LANGSMITH_API_KEY"] = "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"
+print(os.environ["LANGSMITH_API_KEY"])
+
 # Langchain Runnable imports
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
@@ -46,6 +51,11 @@ import importlib
 from RAG_Pipeline.rag_pipeline import RAGPipeline
 from RAG_Pipeline.title_index  import TitleIndex       # if you later need it in UI
 
+# Add these imports at the top with your existing imports
+from Agent.core.agent import LegalQAAgent
+from Agent.tools.web_search_tool import WebSearchTool
+from Agent.config.agent_config import AgentConfig
+
 
 # if 'rag_system' not in st.session_state:
 #     st.session_state.rag_system = None
@@ -56,6 +66,14 @@ if "rag_system" not in st.session_state:
     st.session_state.rag_system     = None     # holds RAGPipeline object
     st.session_state.rag_retriever  = None     # Chroma retriever for fast access
     st.session_state.rag_title_idx  = None     # TitleIndex for fuzzy CELEX lookup
+
+# Add this to your session state initialization (around line 60)
+if "agent_system" not in st.session_state:
+    st.session_state.agent_system = None
+if "agent_ready" not in st.session_state:
+    st.session_state.agent_ready = False
+if "agent_qa_history" not in st.session_state:
+    st.session_state.agent_qa_history = []
 
 
 try:
@@ -194,25 +212,24 @@ class ModelManager:
                 ]
             }
         
-        if os.getenv("GROQ_API_KEY"):
-            providers["Groq"] = {
-                "models": [
-                    "llama-3.3-70b-versatile",
-                    "llama-3.1-8b-instant", 
-                    "gemma2-9b-it"
-                ]
-            }
+        # if os.getenv("GROQ_API_KEY"):
+        #     providers["Groq"] = {
+        #         "models": [
+        #             "meta-llama/llama-4-maverick-17b-128e-instruct"
+        #         ]
+        #     }
         
         if os.getenv("MISTRAL_API_KEY"):
             providers["Mistral"] = {
                 "models": [
+                    "magistral-small-2506",
                     "mistral-small-2503",
                     "mistral-large-2411",
                     "ministral-3b-2410",
                     "ministral-8b-2410",
                     "open-mistral-7b",
                     "open-mixtral-8x7b",
-                    "mistral-small-latest"
+    
                 ]
             }
         
@@ -240,11 +257,12 @@ class ModelManager:
             providers["Github"] = {
                 "models": [
                     "meta/Llama-4-Scout-17B-16E-Instruct",
+                    "meta/Llama-4-Maverick-17B-128E-Instruct-FP8",
                     "Phi-4", 
                     "OpenAI o3",
                     "openai/gpt-4.1",
                     "openai/gpt-4o",
-                    "deepseek/DeepSeek-R1",
+                    "deepseek/DeepSeek-V3-0324",
                     "Grok-3"
                 ]
             }
@@ -263,21 +281,14 @@ class ModelManager:
                     temperature=0.1,
                     top_p=0.7
                 )
-            elif provider == "Groq":
-                api_key = os.getenv("GROQ_API_KEY")
-                if not api_key:
-                    raise ValueError("GROQ_API_KEY not found in environment variables")
-                if not api_key.strip():
-                    raise ValueError("GROQ_API_KEY is empty or contains only whitespace")
+            # elif provider == "Groq":
+            #     api_key = os.getenv("GROQ_API_KEY")
+            #     if not api_key:
+            #         raise ValueError("GROQ_API_KEY not found in environment variables")
                 
-                return ChatGroq(
-                    model=model,
-                    api_key=api_key,
-                    temperature=0.1,
-                    max_tokens=None,
-                    timeout=None,
-                    max_retries=2,
-                )
+            #     return ChatGroq(
+            #         model=model
+            #     )
             elif provider == "Mistral":
                 return ChatMistralAI(
                     model=model,
@@ -307,7 +318,8 @@ class ModelManager:
                     "GPT‑4.1 (OpenAI)": "openai/gpt-4.1",
                     "Phi-4": "microsoft/Phi-4",
                     "meta/Llama-4-Scout-17B-16E-Instruct": "meta/Llama-4-Scout-17B-16E-Instruct",
-                    "DeepSeek-R1": "deepseek/DeepSeek-R1",
+                    "meta/Llama-4-Maverick-17B-128E-Instruct-FP8": "meta/Llama-4-Maverick-17B-128E-Instruct-FP8",
+                    "DeepSeek-V3": "deepseek/DeepSeek-V3-0324",
                     "Grok-3": "xai/grok-3",
                 }
                 registry_model = model_id_map.get(model, model)
@@ -323,7 +335,7 @@ class ModelManager:
             else:
                 raise ValueError(f"Unsupported LLM provider: {provider}")
         except Exception as e:
-            st.error(f"Error creating LLM {provider}/{model}: {str(e)}")
+            st.error(f"Error creating LLM with provider '{provider}' and model '{model}': {str(e)}")
             return None
 
 class SentenceTransformerEmbeddings:
@@ -1009,32 +1021,37 @@ def main():
         st.session_state.evaluation_history = []
         st.session_state.question_bank_ready = False
         st.session_state.embedding_enabled = False
+    if "rag_evaluation_history" not in st.session_state:
+        st.session_state.rag_evaluation_history = []
 
     # Sidebar configuration
     selected_llm_provider, selected_llm_model, response_type = sidebar_configuration()
     
-    # Main content area
-    if not st.session_state.question_bank_ready:
-        st.info("👆 Please load the question bank from the sidebar to begin evaluation")
-    else:
-        if selected_llm_provider and selected_llm_model:
-            tab1, tab2, tab3 = st.tabs([
-            "📝 Manual Evaluation",
-            "📊 Batch Evaluation",
-            "🔍 RAG Q&A",
-            ])
-            with tab1:
-                manual_evaluation_interface(selected_llm_provider, selected_llm_model, response_type)
-            with tab2:
-            #st.markdown("---")
-                batch_evaluation_interface(selected_llm_provider, selected_llm_model, response_type)
-            with tab3:
-                rag_query_interface(selected_llm_provider,
-                                    selected_llm_model,
-                                    response_type)
-            
+    # Tabs: Evaluation (Manual+Batch), RAG Q/A (Manual+Batch), Agent Q/A
+    tab_eval, tab_rag, tab_agent = st.tabs([
+        "📝 Evaluation (LLM)",
+        "🔍 RAG Q&A", 
+        "🤖 Agent Q&A"
+    ])
+
+    with tab_eval:
+        if not st.session_state.question_bank_ready:
+            st.info("👆 Please load the question bank from the sidebar to begin evaluation")
         else:
-            st.warning("Please select LLM provider and model from sidebar")
+            if selected_llm_provider and selected_llm_model:
+                # Manual Evaluation
+                manual_evaluation_interface(selected_llm_provider, selected_llm_model, response_type)
+                st.markdown("---")
+                # Batch Evaluation
+                batch_evaluation_interface(selected_llm_provider, selected_llm_model, response_type)
+            else:
+                st.warning("Please select LLM provider and model from sidebar")
+
+    with tab_rag:
+        rag_evaluation_interface(selected_llm_provider, selected_llm_model, response_type)
+
+    with tab_agent:
+        agent_qa_interface(selected_llm_provider, selected_llm_model, response_type)
 
 
 def sidebar_configuration():
@@ -1050,6 +1067,41 @@ def sidebar_configuration():
             value="./JSON Trial 1",
             help="Path to directory containing BEUL_EXAM_*.json files"
         )
+        
+        # Model Selection - MOVE THIS UP BEFORE AGENT CONFIGURATION
+        st.subheader("🤖 Model Selection")
+        
+        llm_providers = ModelManager.get_available_llm_providers()
+        
+        if not llm_providers:
+            st.error("❌ No LLM providers available. Please check your API keys.")
+            return None, None, None
+        
+        selected_llm_provider = st.selectbox(
+            "LLM Provider",
+            options=list(llm_providers.keys()),
+            help="Select the provider for your language model"
+        )
+        
+        selected_llm_model = None
+        if selected_llm_provider:
+            selected_llm_model = st.selectbox(
+                "LLM Model",
+                options=llm_providers[selected_llm_provider]["models"],
+                help="Select the specific model to use"
+            )
+        
+        # Store in session state for agent use
+        st.session_state.selected_llm_provider = selected_llm_provider
+        st.session_state.selected_llm_model = selected_llm_model
+        
+        response_type = st.selectbox(
+            "Response Type",
+            ["detailed", "concise"],
+            help="Choose whether to generate detailed or concise answers"
+        )
+        
+        st.markdown("---")
         
         # Embedding Configuration (only show if needed)
         st.subheader("🧠 Embedding Configuration")
@@ -1124,6 +1176,38 @@ def sidebar_configuration():
             if col_reset.button("🗑 Reset", use_container_width=True, key="rag_reset_btn"):
                 _reset_rag(chroma_dir)
 
+        # Agent Configuration - NOW AFTER MODEL SELECTION
+        with st.sidebar.expander("🤖 Agent Configuration"):
+            st.markdown("Configure the multi-stage agentic RAG system")
+            
+            # Web search toggle
+            enable_agent_web_search = st.checkbox(
+                "Enable Web Search (Tavily)", 
+                key="agent_web_search",
+                help="Enable Tavily web search for Stage 3 retrieval"
+            )
+            
+            # Agent thresholds
+            st.markdown("**Retrieval Thresholds:**")
+            vector_threshold = st.slider("Vector Store Threshold", 0.0, 1.0, 0.6, 0.1, key="vector_thresh")
+            dataset_threshold = st.slider("Dataset Threshold", 0.0, 1.0, 0.7, 0.1, key="dataset_thresh")
+            
+            # Build agent button
+            col_agent_build, col_agent_reset = st.columns(2)
+            
+            if col_agent_build.button("🔧 Build Agent", use_container_width=True, key="agent_build_btn"):
+                if not st.session_state.get("rag_system"):
+                    st.error("Please build RAG system first (above)")
+                elif not st.session_state.get("enable_emb_sem", False):
+                    st.error("Please enable semantic embeddings first")
+                elif not selected_llm_provider or not selected_llm_model:
+                    st.error("Please select an LLM provider and model first")
+                else:
+                    _setup_agent(enable_agent_web_search, vector_threshold, dataset_threshold, 
+                               selected_llm_provider, selected_llm_model)
+            
+            if col_agent_reset.button("🗑 Reset Agent", use_container_width=True, key="agent_reset_btn"):
+                _reset_agent()
 
         # Question bank loading
         col1, col2 = st.columns(2)
@@ -1153,39 +1237,6 @@ def sidebar_configuration():
                         st.success(f"✅ Basic loading complete! Loaded {question_count} questions")
                     else:
                         st.error("❌ Failed to load question bank")
-        
-        st.markdown("---")
-        
-        # Model Selection
-        st.subheader("🤖 Model Selection")
-    
-
-        # Continue with existing provider selection...
-        llm_providers = st.session_state.evaluator.model_manager.get_available_llm_providers()
-        
-        if not llm_providers:
-            st.error("❌ No LLM providers available. Please check your API keys.")
-            return None, None, None
-        
-        selected_llm_provider = st.selectbox(
-            "LLM Provider",
-            options=list(llm_providers.keys()),
-            help="Select the provider for your language model"
-        )
-        
-        selected_llm_model = None
-        if selected_llm_provider:
-            selected_llm_model = st.selectbox(
-                "LLM Model",
-                options=llm_providers[selected_llm_provider]["models"],
-                help="Select the specific model to use"
-            )
-        
-        response_type = st.selectbox(
-            "Response Type",
-            ["detailed", "concise"],
-            help="Choose whether to generate detailed or concise answers"
-        )
         
         st.markdown("---")
         
@@ -1636,7 +1687,7 @@ def _setup_rag(file_obj, persist_dir):
         dataset_path  = tmp_path,
         persist_dir   = Path(persist_dir),
         embedding     = embed_obj,
-        k             = 7,               # or pull from a slider if you add one
+        k             = 10,               # Instead of 7 - get more context
         force_rebuild = False,
         col_map       = col_map,
     )
@@ -1658,111 +1709,334 @@ def _reset_rag(persist_dir):
         st.session_state[key] = None
     st.info("RAG state cleared.")
 
-def rag_query_interface(selected_provider: str,
-                        selected_model: str,
-                        response_type: str):
+def display_rag_batch_sidebar_info(selected_llm_provider, selected_llm_model):
+    """Display sidebar info for batch RAG Q&A evaluation (no Tips section)"""
+    st.subheader("⚙️ Batch Settings (RAG Q&A)")
+    # Statistics about available questions
+    if st.session_state.question_bank_ready:
+        total_questions = len(st.session_state.evaluator.question_bank.questions)
+        st.metric("Available Questions", total_questions)
+        st.info("🟢 Database Ready")
+    # Current session results
+    if st.session_state.rag_evaluation_history:
+        st.markdown("---")
+        st.subheader("📊 Session Results (RAG Q&A)")
+        # Filter current model results
+        current_results = [r for r in st.session_state.rag_evaluation_history 
+                          if r.get("llm_provider") == selected_llm_provider 
+                          and r.get("llm_model") == selected_llm_model]
+        if current_results:
+            st.write(f"**Current Model:** {len(current_results)} evaluations")
+            avg_scores = {
+                'bleu': np.mean([r['evaluation']['bleu_score'] for r in current_results]),
+                'rouge': np.mean([r['evaluation']['rouge_score'] for r in current_results]),
+                'string': np.mean([r['evaluation']['string_similarity_score'] for r in current_results]),
+            }
+            if any('semantic_similarity_score' in r['evaluation'] for r in current_results):
+                avg_scores['semantic'] = np.mean([r['evaluation'].get('semantic_similarity_score', 0.0) for r in current_results])
+            st.write(f"Avg BLEU: {avg_scores['bleu']:.3f}")
+            st.write(f"Avg ROUGE: {avg_scores['rouge']:.3f}")
+            st.write(f"Avg String Sim: {avg_scores['string']:.3f}")
+            if 'semantic' in avg_scores:
+                st.write(f"Avg Semantic Sim: {avg_scores['semantic']:.3f}")
+        st.write(f"**Total Session:** {len(st.session_state.rag_evaluation_history)} evaluations")
+
+def rag_evaluation_interface(selected_provider, selected_model, response_type):
+    st.subheader("🔍 RAG Q&A Evaluation")
     if st.session_state.rag_system is None:
         st.info("Upload dataset and build RAG first.")
         return
 
-    question = st.text_area("Legal question (free text):")
-    if st.button("🪄 Generate", use_container_width=True) and question:
-        llm = st.session_state.evaluator.model_manager.create_llm(
-            selected_provider, selected_model
+    # --- Manual RAG Q&A Evaluation ---
+    st.markdown("### Manual RAG Q&A Evaluation")
+    question = st.text_area("Enter your legal question for RAG Q&A:", key="rag_manual_question", height=100)
+    reference_mode = st.radio(
+        "Reference Answer Source (RAG Q&A):",
+        ["🤖 Auto-find from database", "✏️ Provide manually"],
+        horizontal=True,
+        key="rag_reference_mode_manual"
+    )
+    manual_reference_answer = None
+    if reference_mode == "✏️ Provide manually":
+        manual_reference_answer = st.text_area(
+            "Manual Reference Answer (RAG Q&A):",
+            placeholder="Provide the expected/correct answer for evaluation",
+            height=150,
+            key="rag_manual_reference_answer"
         )
-
-        from langchain.chains import RetrievalQA
-        chain = RetrievalQA.from_chain_type(
-            llm=llm,
-            chain_type="stuff",
-            retriever=st.session_state.rag_retriever,
-            chain_type_kwargs=dict(prompt=_rag_prompt(response_type)),
-            return_source_documents=True
-        )
-        # Get both answer and context
-        with st.spinner("Generating answer..."):
-            result = chain({"query": question})
-        answer = result["result"]
-        source_docs = result.get("source_documents", [])
-       # Debug information
-        st.write(f"Debug: Found {len(source_docs)} source documents")
-        if source_docs:
-            st.write("Debug: First doc metadata:", source_docs[0].metadata)
-        
-        # Build context from retrieved documents
-        context = "\n\n".join([doc.page_content for doc in source_docs])
-
-        # --- Show metadata of retrieved cases ---
-        if source_docs:
-            st.markdown("#### Retrieved Case Metadata")
-            meta_rows = []
-            for i, doc in enumerate(source_docs):
-                meta = doc.metadata
-                meta_rows.append({
-                    "Doc #": i + 1,
-                    "CELEX_ID": meta.get("celex", "N/A"),
-                    "Title": meta.get("case_title", "N/A"),
-                    "Date": meta.get("date", "N/A"),
-                    "Paragraph": meta.get("para_no", "N/A"),
-                    "Role": meta.get("role", "N/A")
-                })
-            st.table(meta_rows)
+    if st.button("🪄 Generate & Evaluate (RAG Q&A)", key="rag_manual_eval_btn"):
+        if not question.strip():
+            st.error("❌ Please provide a question")
+        elif reference_mode == "✏️ Provide manually" and not manual_reference_answer.strip():
+            st.error("❌ Please provide a reference answer")
         else:
-            st.warning("⚠️ No documents were retrieved for this query.")
-
-
-         # Show context
-        st.markdown("#### Retrieved Context")
-        if context:
-            st.text_area("Context from retrieved documents:", context, height=200)
-        else:
-            st.warning("No context was retrieved.")
-
-        # Show answer
-        st.markdown("#### Answer")
-        st.write(answer)
-
-        # Validate citations
-        if context:
-            invalid_cites = validate_citations(answer, context)
-            if invalid_cites:
-                st.warning(
-                    f"⚠️ The following citations in the answer are NOT present in the retrieved context: {invalid_cites}\n"
-                    "This may indicate hallucination or improper grounding."
+            with st.spinner("Generating RAG answer and evaluating..."):
+                llm = st.session_state.evaluator.model_manager.create_llm(selected_provider, selected_model)
+                from langchain.chains import RetrievalQA
+                chain = RetrievalQA.from_chain_type(
+                    llm=llm,
+                    chain_type="stuff",
+                    retriever=st.session_state.rag_retriever,
+                    chain_type_kwargs=dict(prompt=_rag_prompt(response_type)),
+                    return_source_documents=True
                 )
-            else:
-                st.success("✅ All citations in the answer are present in the context.")
+                result = chain.invoke({"query": question})
+                answer = result["result"]
+                source_docs = result.get("source_documents", [])
+                context = "\n\n".join([doc.page_content for doc in source_docs])
+                if reference_mode == "🤖 Auto-find from database":
+                    reference_info = st.session_state.evaluator.question_bank.find_reference_answer_embedding(question)
+                    if reference_info and reference_info.get("question_data"):
+                        reference_answer = reference_info["question_data"]["answer_text"]
+                    elif reference_info and reference_info.get("answer_text"):
+                        reference_answer = reference_info["answer_text"]
+                    else:
+                        reference_answer = None
+                else:
+                    reference_answer = manual_reference_answer
+                if not reference_answer:
+                    st.error("No reference answer found for evaluation.")
+                else:
+                    evaluation = asyncio.run(
+                        st.session_state.evaluator.evaluate_single_response(answer, reference_answer)
+                    )
+                    rag_result = {
+                        "question": question,
+                        "generated_answer": answer,
+                        "reference_answer": reference_answer,
+                        "evaluation": evaluation,
+                        "llm_provider": selected_provider,
+                        "llm_model": selected_model,
+                        "response_type": response_type,
+                        "rag": True,
+                        "timestamp": datetime.now().isoformat(),
+                        "retrieved_context": context,
+                        "source_docs": [doc.metadata for doc in source_docs],
+                    }
+                    st.session_state.rag_evaluation_history.append(rag_result)
+                    show_rag_evaluation_results(rag_result)
+    st.markdown("---")
+    # --- Batch RAG Q&A Evaluation ---
+    st.markdown("### Batch RAG Q&A Evaluation")
+    col1, col2 = st.columns([2, 1])
+    with col1:
+        max_questions = st.number_input(
+            "Maximum questions to evaluate (RAG Q&A):",
+            min_value=1,
+            max_value=100,
+            value=10,
+            key="rag_batch_max_questions"
+        )
+        if st.button("🚀 Start Batch RAG Q&A Evaluation", key="rag_batch_eval_btn"):
+            with st.spinner("Running batch RAG Q&A evaluation..."):
+                questions = st.session_state.evaluator.question_bank.get_all_questions()
+                questions = questions[:max_questions]
+                results = []
+                llm = st.session_state.evaluator.model_manager.create_llm(selected_provider, selected_model)
+                from langchain.chains import RetrievalQA
+                chain = RetrievalQA.from_chain_type(
+                    llm=llm,
+                    chain_type="stuff",
+                    retriever=st.session_state.rag_retriever,
+                    chain_type_kwargs=dict(prompt=_rag_prompt(response_type)),
+                    return_source_documents=True
+                )
+                progress_bar = st.progress(0)
+                for idx, qdata in enumerate(questions):
+                    question_text = qdata["question_text"]
+                    reference_answer = qdata["answer_text"]
+                    try:
+                        result = chain.invoke({"query": question_text})
+                        answer = result["result"]
+                        source_docs = result.get("source_documents", [])
+                        context = "\n\n".join([doc.page_content for doc in source_docs])
+                        evaluation = asyncio.run(
+                            st.session_state.evaluator.evaluate_single_response(answer, reference_answer)
+                        )
+                        rag_result = {
+                            "question_id": qdata.get("id"),
+                            "year": qdata.get("year"),
+                            "question_number": qdata.get("question_number"),
+                            "question": question_text,
+                            "generated_answer": answer,
+                            "reference_answer": reference_answer,
+                            "evaluation": evaluation,
+                            "llm_provider": selected_provider,
+                            "llm_model": selected_model,
+                            "response_type": response_type,
+                            "rag": True,
+                            "timestamp": datetime.now().isoformat(),
+                            "retrieved_context": context,
+                            "source_docs": [doc.metadata for doc in source_docs],
+                            "source_file": qdata.get("source_file", "")
+                        }
+                        results.append(rag_result)
+                    except Exception as e:
+                        st.error(f"Error processing question {idx + 1}: {str(e)}")
+                        continue
+                    progress_bar.progress((idx + 1) / len(questions))
+                progress_bar.empty()
+                st.session_state.rag_evaluation_history.extend(results)
+                if results:
+                    st.success(f"✅ Batch RAG Q&A evaluation completed! Processed {len(results)} questions")
+                    # Results Summary
+                    aggregate_scores = st.session_state.evaluator.calculate_aggregate_scores(results)
+                    st.subheader("📊 Results Summary (RAG Q&A)")
+                    col_a, col_b, col_c, col_d, col_e = st.columns(5)
+                    with col_a:
+                        st.metric("Total Questions", len(results))
+                    with col_b:
+                        st.metric("Avg BLEU", f"{aggregate_scores.get('Avg BLEU', 0):.3f}")
+                    with col_c:
+                        st.metric("Avg ROUGE", f"{aggregate_scores.get('Avg ROUGE', 0):.3f}")
+                    with col_d:
+                        st.metric("Avg String Similarity", f"{aggregate_scores.get('Avg String Similarity', 0):.3f}")
+                    with col_e:
+                        if 'Avg Semantic Similarity' in aggregate_scores:
+                            st.metric("Avg Semantic Similarity", f"{aggregate_scores['Avg Semantic Similarity']:.3f}")
+                    # Results table preview
+                    st.subheader("📋 Results Preview (RAG Q&A)")
+                    display_results_preview(results)
+                    # Export section (batch only)
+                    st.subheader("📥 Export Results (RAG Q&A)")
+                    col_export1, col_export2 = st.columns(2)
+                    with col_export1:
+                        if st.button("Download Excel Report (RAG Q&A)", key="rag_excel_export_btn"):
+                            export_results(results, "excel")
+                    with col_export2:
+                        if st.button("Download JSON Report (RAG Q&A)", key="rag_json_export_btn"):
+                            export_results(results, "json")
+                    # Detailed analysis in expander
+                    with st.expander("📊 Detailed Analysis (RAG Q&A)", expanded=False):
+                        display_detailed_analysis(results, selected_provider, selected_model, response_type)
+                else:
+                    st.error("❌ Batch RAG Q&A evaluation failed - no results generated")
+    with col2:
+        display_rag_batch_sidebar_info(selected_provider, selected_model)
+        # Sidebar export for full session
+        st.markdown("---")
+        st.subheader("📊 Export Session Results (RAG Q&A)")
+        if st.session_state.rag_evaluation_history:
+            st.metric("Evaluations Completed", len(st.session_state.rag_evaluation_history))
+            export_format = st.selectbox("Export Format (RAG Q&A)", ["excel", "json"], key="rag_export_format")
+            if st.button("📥 Export Session Results (RAG Q&A)", key="rag_export_btn"):
+                export_results(st.session_state.rag_evaluation_history, export_format)
         else:
-            st.error("❌ Cannot validate citations - no context retrieved.")
+            st.text("No RAG Q&A evaluations to export yet")
 
+# --- NEW: Show RAG Evaluation Results ---
+def show_rag_evaluation_results(result):
+    st.markdown("---")
+    st.subheader("📊 RAG Q&A Evaluation Results")
+    # Retrieved Context Section
+    st.markdown("#### Retrieved Context")
+    source_docs = result.get("source_docs", [])
+    st.write(f"Retrieved {len(source_docs)} documents")
+    if source_docs:
+        meta_rows = []
+        for i, meta in enumerate(source_docs):
+            meta_rows.append({
+                "Doc #": i + 1,
+                "CELEX_ID": meta.get("celex", "N/A"),
+                "Title": meta.get("case_title", "N/A"),
+                "Date": meta.get("date", "N/A"),
+                "Paragraph": meta.get("para_no", "N/A"),
+                "Role": meta.get("role", "N/A")
+            })
+        st.table(meta_rows)
+    context = result.get("retrieved_context", "")
+    if context:
+        st.text_area("Context from retrieved documents:", context, height=200)
+    else:
+        st.warning("No context was retrieved.")
+    # Show answer
+    st.markdown("#### Retrieved Answer (RAG)")
+    st.info(result["generated_answer"])
+    # Reference answer
+    st.markdown("#### Reference Answer")
+    st.info(result["reference_answer"])
+    # Evaluation metrics
+    show_evaluation_results(result)
 
 def _rag_prompt(style):
     """
-    Returns a PromptTemplate that instructs the LLM to answer using only the information in <context>, referencing case titles and paraphrasing as needed. No explicit citation format, no mention of missing context, and answers should be a single, well-structured paragraph.
+    Hybrid-RAG prompt   ·   v2-June-2025
+    ─────────────────────────────────────
+    • Grounds where possible, but lets the LLM draw on its parametric EU-law knowledge
+      when the retrieved context is silent.
+    • Uses quotation-marks around every cited case title so downstream post-processing
+      can extract them reliably.
+    • Adds a negative example to discourage hallucinated / invented case names.
+    • For the "concise" style, hard-caps the answer at ~120 words.
     """
-    if style == "detailed":
+
+    common_rules = (
+    "INSTRUCTIONS:\n"
+    "• Provide a complete, accurate answer using your EU-law expertise.\n"
+    "• When a sentence is directly supported or illustrated by a passage in <context>, "
+    "append the case title **exactly as it appears in <context>, inside quotation marks** "
+    "and include a short quote or paraphrase (e.g. \"Costa v ENEL\").\n"
+    "• Do **not** invent or guess case names – cite only those that occur in <context>.\n"
+    "• If the context is silent on a point, rely on general EU jurisprudence, but **do not "
+    "mention that the context was missing**.\n"
+    "• Write in clear, well-structured paragraphs (no bullet points).\n"
+    )
+
+    # ── 2. Negative example (hallucinated citation) ────────────────────────────────
+    negative_example = (
+        "NEGATIVE EXAMPLE (hallucinated citation):\n"
+        "Context: [Commission v Greece] The Greek government failed to implement Directive 91/271/EEC...\n\n"
+        "Question: What are the consequences of failing to implement EU directives?\n\n"
+        "❌ Bad answer (do NOT copy this): Member States may also face sanctions established in "
+        "\"Fictional v MemberState\". ← This case is NOT in <context>, so the citation is invalid.\n\n"
+    )
+
+    # ── 3. Positive example (proper citation usage) ────────────────────────────────
+    positive_example = (
+        "POSITIVE EXAMPLE:\n"
+        "Context:\n"
+        "[Commission v Greece] The Greek government failed to implement Directive 91/271/EEC "
+        "within the prescribed timeframe...\n\n"
+        "Question: What are the consequences of failing to implement EU directives?\n\n"
+        "✅ Good answer: Member States face several consequences when they fail to implement directives. "
+        "The Commission may initiate infringement proceedings under Article 258 TFEU. As shown in "
+        "\"Commission v Greece\", legal action can follow when a directive is not implemented "
+        "\"within the prescribed timeframe\".  In addition, the Francovich doctrine establishes that "
+        "Member States are liable in damages for failure to transpose directives, creating enforceable "
+        "rights for individuals—though this particular case is not detailed in the current context.\n\n"
+    )
+
+
+    header = (
+        "You are an EU-law specialist. Answer the following question as instructed.\n\n"
+    )
+
+    # ──────────────────────────────────────────────────────────────────────────
+    if style.lower() == "detailed":
         tmpl = (
-            "You are an EU-law specialist. Answer the following question using only the information provided in <context> below. "
-            "Reference the relevant case titles naturally in your answer, paraphrasing the provided paragraphs as needed. "
-            "Do NOT invent or guess information. If the context does not cover a point, answer as best you can without mentioning the absence of information. "
-            "Write your answer in a coherent, well-structured paragraphs, incorporating relevant legal principles, background, and exceptions as appropriate. "
-            "Do not use any citation format or CELEX IDs—refer only to case titles in quotation marks. "
-            "\n\nExample context:\n[Commission v Greece]\nThe Greek government failed to fulfill its obligations...\n[Some Previous Case]\nRelevant legal background..."
-            "\nExample Q: What obligations did Greece fail to fulfill?"
-            "\nExample A: In 'Commission v Greece', the Greek government failed to fulfill its obligations as described in the provided context. This is further supported by the background from Some Previous Case, which clarifies the requirements."
-            "\n\n<context>\n{context}\n\nQ: {question}\nA:"
+            header
+            + common_rules
+            + "• Aim for a comprehensive answer (several paragraphs) covering principles, exceptions, and rationale.\n"
+            "\n"
+            + negative_example
+            + positive_example
+            + "<context>\n{context}\n</context>\n\n"
+            "Question: {question}\n\n"
+            "Answer:"
         )
-    else:
+    else:  # concise
         tmpl = (
-            "You are an EU-law expert. Provide a concise, authoritative answer using only the information in <context>. "
-            "Reference case titles naturally in your answer, paraphrasing as needed. "
-            "Do NOT invent or guess information. If the context does not cover a point, answer as best you can without mentioning the absence of information. "
-            "Write your answer as a single, clear paragraph. Do not use any citation format or CELEX IDs—refer only to case titles. "
-            "\n\nExample context:\n[Commission v Greece]\nThe Greek government failed to fulfill its obligations...\n[Some Previous Case]\nRelevant legal background..."
-            "\nExample Q: What obligations did Greece fail to fulfill?"
-            "\nExample A: In Commission v Greece, the Greek government failed to fulfill its obligations as described in the provided context. This is further supported by the background from Some Previous Case."
-            "\n\n<context>\n{context}\n\nQ: {question}\nA:"
+            header
+            + common_rules
+            + "• Provide a single paragraph **no longer than 120 words**.\n"
+            "\n"
+            + negative_example
+            + positive_example
+            + "<context>\n{context}\n</context>\n\n"
+            "Question: {question}\n\n"
+            "Answer (≤ 250 words):"
         )
+    
     from langchain.prompts import PromptTemplate
     return PromptTemplate(
         input_variables=["context", "question"],
@@ -1810,6 +2084,321 @@ def validate_citations(answer, context):
     context_cites = context_citations(context)
     invalid = answer_cites - context_cites
     return list(invalid)
+
+def _setup_agent(enable_web_search, vector_thresh, dataset_thresh, selected_provider=None, selected_model=None):
+    """Setup the multi-stage agent system"""
+    try:
+        with st.spinner("Building agent system..."):
+            # Use a fixed path for the main dataset or get it from session state
+            main_dataset_path = "./PAR-TO-PAR (MAIN).csv"
+            
+            if not Path(main_dataset_path).exists():
+                st.error(f"Main dataset not found at {main_dataset_path}")
+                st.info("Please ensure your main dataset (110k rows) is available at the specified path")
+                return
+            
+            # Load main dataset with proper encoding handling
+            try:
+                # Try UTF-8 first
+                main_df = pd.read_csv(main_dataset_path, encoding='utf-8')
+            except UnicodeDecodeError:
+                try:
+                    # Try latin-1 (common for European legal documents)
+                    main_df = pd.read_csv(main_dataset_path, encoding='latin-1')
+                    st.info("Loaded dataset using latin-1 encoding")
+                except UnicodeDecodeError:
+                    try:
+                        # Try cp1252 (Windows encoding)
+                        main_df = pd.read_csv(main_dataset_path, encoding='cp1252')
+                        st.info("Loaded dataset using cp1252 encoding")
+                    except UnicodeDecodeError:
+                        # Last resort: ignore errors
+                        main_df = pd.read_csv(main_dataset_path, encoding='utf-8', errors='ignore')
+                        st.warning("Loaded dataset with some character encoding issues ignored")
+            
+            st.write(f"Loaded main dataset: {len(main_df)} rows")
+            st.write(f"Dataset columns: {list(main_df.columns)}")
+            
+            # Use the selected LLM from sidebar
+            providers = ModelManager.get_available_llm_providers()
+            if not providers:
+                st.error("No LLM providers available")
+                return
+            
+            # Use the passed provider and model, or fall back to first available
+            if selected_provider and selected_model:
+                provider = selected_provider
+                model = selected_model
+                st.info(f"Using selected LLM: {provider}/{model}")
+            else:
+                # Fallback to first available
+                provider = list(providers.keys())[0]
+                model = providers[provider]["models"][0]
+                st.warning(f"No LLM selected, using fallback: {provider}/{model}")
+            
+            llm = ModelManager.create_llm(provider, model)
+            
+            if not llm:
+                st.error("Failed to create LLM")
+                return
+            
+            st.success(f"✅ LLM created: {provider}/{model}")
+            
+            # Setup web search if enabled
+            web_search_tool = None
+            if enable_web_search:
+                try:
+                    web_search_tool = WebSearchTool()  # Will use TAVILY_API_KEY from .env
+                    st.success("✅ Web search enabled")
+                except Exception as e:
+                    st.warning(f"Web search setup failed: {e}")
+            
+            # Create agent configuration
+            config = AgentConfig()
+            config.retrieval_config["vector_threshold"] = vector_thresh
+            config.retrieval_config["dataset_threshold"] = dataset_thresh
+            
+            # Verify RAG components are available
+            if not st.session_state.rag_retriever:
+                st.error("RAG retriever not available. Please build RAG system first.")
+                return
+            
+            # Create the agent
+            agent = LegalQAAgent(
+                vector_store=st.session_state.rag_retriever.vectorstore,
+                dataset_df=main_df,
+                llm=llm,
+                web_search_tool=web_search_tool,
+                title_index=st.session_state.rag_title_idx,
+                config=config.get_config()
+            )
+            
+            st.session_state.agent_system = agent
+            st.session_state.agent_ready = True
+            st.success("✅ Agent system ready!")
+            
+    except Exception as e:
+        st.error(f"Error setting up agent: {e}")
+        import traceback
+        st.error(traceback.format_exc())
+
+def _reset_agent():
+    """Reset the agent system"""
+    st.session_state.agent_system = None
+    st.session_state.agent_ready = False
+    st.session_state.agent_qa_history = []
+    st.info("Agent system reset.")
+
+def agent_qa_interface(selected_provider, selected_model, response_type):
+    """Agent Q&A interface integrated into main app"""
+    st.subheader("🤖 Multi-Stage Agent Q&A")
+    
+    if not st.session_state.agent_ready:
+        st.info("👈 Please configure and build the Agent system from the sidebar")
+        return
+    
+    # Question input
+    question = st.text_area(
+        "Ask your legal question:",
+        placeholder="e.g., What is the principle of subsidiarity in EU law?",
+        height=100,
+        key="agent_question_input"
+    )
+    
+    col1, col2, col3 = st.columns([2, 2, 3])
+    
+    with col1:
+        if st.button("🚀 Ask Agent", type="primary", key="ask_agent_btn"):
+            if question.strip():
+                _process_agent_question(question)
+            else:
+                st.error("Please enter a question")
+    
+    with col2:
+        if st.button("🗑️ Clear History", key="clear_agent_history"):
+            st.session_state.agent_qa_history = []
+            st.rerun()
+    
+    with col3:
+        if st.session_state.agent_qa_history:
+            if st.button("📥 Export Agent Results", key="export_agent_results"):
+                _export_agent_results()
+    
+    # Display agent status
+    if st.session_state.agent_system:
+        status = st.session_state.agent_system.get_system_status()
+        with st.expander("🔧 Agent System Status"):
+            col_s1, col_s2, col_s3 = st.columns(3)
+            with col_s1:
+                st.metric("Vector Store", "✅" if status["vector_store_ready"] else "❌")
+                st.metric("Dataset Size", f"{status['dataset_size']:,}")
+            with col_s2:
+                st.metric("Web Search", "✅" if status["web_search_enabled"] else "❌")
+                st.metric("Title Index", "✅" if status["title_index_ready"] else "❌")
+            with col_s3:
+                st.write("**LLM Model:**")
+                st.code(status["llm_model"])
+    
+    # Display Q&A history
+    if st.session_state.agent_qa_history:
+        st.markdown("---")
+        _display_agent_qa_results()
+
+def _process_agent_question(question: str):
+    """Process question through the agent system"""
+    with st.spinner("🤖 Processing through multi-stage retrieval..."):
+        try:
+            # Run the agent
+            result = asyncio.run(st.session_state.agent_system.answer_question(question))
+            
+            # Add to history
+            st.session_state.agent_qa_history.insert(0, {
+                "question": question,
+                "result": result,
+                "timestamp": datetime.now()
+            })
+            
+            st.success("✅ Question processed successfully!")
+            
+        except Exception as e:
+            st.error(f"Error processing question: {e}")
+            import traceback
+            st.error(traceback.format_exc())
+
+def _display_agent_qa_results():
+    """Display agent Q&A results with detailed breakdown"""
+    st.subheader("📋 Agent Q&A Results")
+    
+    for i, qa in enumerate(st.session_state.agent_qa_history):
+        with st.expander(f"Q{i+1}: {qa['question'][:80]}...", expanded=(i==0)):
+            result = qa["result"]
+            
+            # Answer
+            st.markdown("**🤖 Agent Answer:**")
+            st.info(result["answer"])
+            
+            # Key metrics
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                confidence = result["confidence"]["overall_confidence"]
+                st.metric("Overall Confidence", f"{confidence:.3f}")
+                
+            with col2:
+                st.metric("Grounding Level", result["grounding_level"].title())
+                
+            with col3:
+                st.metric("Processing Time", f"{result['processing_time']:.2f}s")
+                
+            with col4:
+                st.metric("Sources Found", result["metadata"]["num_sources"])
+            
+            # Retrieval stages visualization
+            st.markdown("**🔍 Retrieval Stages Used:**")
+            stages_used = result["retrieval_stages"]
+            stage_colors = {
+                "vector_store": "🟢",
+                "dataset_query": "🟡", 
+                "web_search": "🔵"
+            }
+            
+            if len(stages_used) > 0:
+                stage_cols = st.columns(len(stages_used))
+                for idx, stage in enumerate(stages_used):
+                    with stage_cols[idx]:
+                        color = stage_colors.get(stage, "⚪")
+                        st.markdown(f"{color} **{stage.replace('_', ' ').title()}**")
+            
+            # Confidence breakdown
+            st.markdown("**📊 Confidence Components:**")
+            conf_components = result["confidence"]["components"]
+            
+            conf_col1, conf_col2, conf_col3 = st.columns(3)
+            with conf_col1:
+                st.metric("Retrieval", f"{conf_components['retrieval_confidence']:.3f}")
+            with conf_col2:
+                st.metric("Context Quality", f"{conf_components['context_quality']:.3f}")
+            with conf_col3:
+                st.metric("Grounding", f"{conf_components['grounding_confidence']:.3f}")
+            
+            # Sources breakdown
+            sources_info = result["sources"]
+            if sources_info.get("formatted_sources"):
+                st.markdown("**📚 Sources by Type:**")
+                
+                # Source type counts
+                type_counts = sources_info.get("sources_by_type", {})
+                if type_counts:
+                    type_cols = st.columns(len(type_counts))
+                    for idx, (source_type, count) in enumerate(type_counts.items()):
+                        with type_cols[idx]:
+                            st.metric(source_type.replace('_', ' ').title(), count)
+                
+                # Detailed sources - use a simple list instead of nested expander
+                st.markdown("**📖 Detailed Sources:**")
+                for source in sources_info["formatted_sources"]:
+                    st.write(f"• {source}")
+            
+            # Technical details - use simple markdown instead of nested expander
+            st.markdown("**🔧 Technical Details:**")
+            tech_details = {
+                "context_quality": result["context_quality"],
+                "sufficiency_score": result.get("sufficiency_score", "N/A"),
+                "metadata": result["metadata"]
+            }
+            
+            # Display as formatted text instead of JSON
+            st.markdown(f"- **Context Quality Score:** {tech_details['context_quality'].get('score', 'N/A')}")
+            st.markdown(f"- **Sufficiency Score:** {tech_details['sufficiency_score']}")
+            st.markdown(f"- **Context Length:** {tech_details['metadata']['context_length']}")
+            st.markdown(f"- **Question:** {tech_details['metadata']['question'][:100]}...")
+
+def _export_agent_results():
+    """Export agent Q&A results"""
+    if not st.session_state.agent_qa_history:
+        st.warning("No agent results to export")
+        return
+    
+    try:
+        # Prepare data for export
+        export_data = []
+        for qa in st.session_state.agent_qa_history:
+            result = qa["result"]
+            export_data.append({
+                "timestamp": qa["timestamp"].isoformat(),
+                "question": qa["question"],
+                "answer": result["answer"],
+                "grounding_level": result["grounding_level"],
+                "overall_confidence": result["confidence"]["overall_confidence"],
+                "retrieval_confidence": result["confidence"]["components"]["retrieval_confidence"],
+                "context_quality": result["confidence"]["components"]["context_quality"],
+                "grounding_confidence": result["confidence"]["components"]["grounding_confidence"],
+                "processing_time": result["processing_time"],
+                "stages_used": ", ".join(result["retrieval_stages"]),
+                "num_sources": result["metadata"]["num_sources"],
+                "context_length": result["metadata"]["context_length"]
+            })
+        
+        df = pd.DataFrame(export_data)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"agent_qa_results_{timestamp}.xlsx"
+        
+        # Create Excel file
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Agent_QA_Results')
+        
+        st.download_button(
+            label="📥 Download Agent Results",
+            data=output.getvalue(),
+            file_name=filename,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+        
+        st.success(f"✅ Agent results ready for download: {filename}")
+        
+    except Exception as e:
+        st.error(f"Export failed: {e}")
 
 if __name__ == "__main__":
     main()
