@@ -6,12 +6,11 @@ from ragas.llms import LangchainLLMWrapper
 from ragas.embeddings import LangchainEmbeddingsWrapper
 from ragas.metrics import (
     LLMContextRecall,
-    LLMContextPrecisionWithReference,
-    ContextEntityRecall,
+    LLMContextPrecisionWithoutReference,
+    # ContextEntityRecall,
     Faithfulness, 
     FactualCorrectness,
-    ResponseRelevancy,
-    NoiseSensitivity
+    AnswerAccuracy
 )
 
 ### RAGAS RAG EVALUATION FRAMEWORK - ENHANCED VERSION
@@ -27,10 +26,11 @@ from ragas.metrics import (
 # 
 # Key metrics:
 # - Context Recall: Measures completeness of retrieved context vs reference
-# - Context Precision: Measures precision of retrieved context vs reference
+# - Context Precision: Measures precision of retrieved context vs generated response
 # - Context Entity Recall: Measures entity-based recall between context and reference
 # - Faithfulness: Measures factual consistency of answer vs context  
 # - Factual Correctness: Measures factual accuracy of answer vs reference
+# - Answer Accuracy: Measures accuracy of generated answer vs reference
 # - Response Relevancy: Measures relevance of answer to question
 # - Noise Sensitivity: Measures robustness to irrelevant context
 
@@ -73,11 +73,11 @@ class RAGASEvalPipeline:
         print("✅ RAGAS Pipeline initialized successfully")
 
     def _initialize_metrics(self):
-        """Initialize all RAGAS metrics with error handling"""
+        """Initialize only the 5 core RAGAS metrics with error handling"""
         
         # Context Precision - usually most reliable
         try:
-            self.context_precision = LLMContextPrecisionWithReference(llm=self.evaluator_llm)
+            self.context_precision = LLMContextPrecisionWithoutReference(llm=self.evaluator_llm)
             self.metrics['context_precision'] = self.context_precision
             print("✅ RAGAS Context Precision initialized")
         except Exception as e:
@@ -93,42 +93,14 @@ class RAGASEvalPipeline:
             print(f"❌ RAGAS Context Recall failed: {e}")
             self.context_recall = None
         
-        # Context Entity Recall
-        try:
-            self.context_entity_recall = ContextEntityRecall(llm=self.evaluator_llm)
-            self.metrics['context_entity_recall'] = self.context_entity_recall
-            print("✅ RAGAS Context Entity Recall initialized")
-        except Exception as e:
-            print(f"❌ RAGAS Context Entity Recall failed: {e}")
-            self.context_entity_recall = None
-        
-        # Noise Sensitivity - this one has been problematic
-        try:
-            self.noise_sensitivity = NoiseSensitivity(
-                llm=self.evaluator_llm,
-                mode="irrelevant"
-            )
-            self.metrics['noise_sensitivity'] = self.noise_sensitivity
-            print("✅ RAGAS Noise Sensitivity initialized")
-        except Exception as e:
-            print(f"❌ RAGAS Noise Sensitivity failed: {e}")
-            self.noise_sensitivity = None
-        
-        # Response Relevancy - requires embeddings
-        if self.evaluator_embeddings:
-            try:
-                self.response_relevancy = ResponseRelevancy(
-                    llm=self.evaluator_llm, 
-                    embeddings=self.evaluator_embeddings
-                )
-                self.metrics['response_relevancy'] = self.response_relevancy
-                print("✅ RAGAS Response Relevancy initialized")
-            except Exception as e:
-                print(f"❌ RAGAS Response Relevancy failed: {e}")
-                self.response_relevancy = None
-        else:
-            self.response_relevancy = None
-            print("⚠️ RAGAS Response Relevancy skipped - no embeddings provided")
+        # # Context Entity Recall
+        # try:
+        #     self.context_entity_recall = ContextEntityRecall(llm=self.evaluator_llm)
+        #     self.metrics['context_entity_recall'] = self.context_entity_recall
+        #     print("✅ RAGAS Context Entity Recall initialized")
+        # except Exception as e:
+        #     print(f"❌ RAGAS Context Entity Recall failed: {e}")
+        #     self.context_entity_recall = None
         
         # Faithfulness
         try:
@@ -145,7 +117,7 @@ class RAGASEvalPipeline:
                 llm=self.evaluator_llm,
                 mode="f1",
                 beta=1.0,
-                atomicity="high",
+                atomicity="low",
                 coverage="high"
             )
             self.metrics['factual_correctness'] = self.factual_correctness
@@ -153,6 +125,23 @@ class RAGASEvalPipeline:
         except Exception as e:
             print(f"❌ RAGAS Factual Correctness failed: {e}")
             self.factual_correctness = None
+        
+        # Answer Accuracy
+        try:
+            self.answer_accuracy = AnswerAccuracy(llm=self.evaluator_llm)
+            self.metrics['answer_accuracy'] = self.answer_accuracy
+            print("✅ RAGAS Answer Accuracy initialized")
+        except Exception as e:
+            print(f"❌ RAGAS Answer Accuracy failed: {e}")
+            self.answer_accuracy = None
+        
+        # REMOVED: Noise Sensitivity (was causing timeouts and consuming too many LLM calls)
+        self.noise_sensitivity = None
+        print("⚠️ RAGAS Noise Sensitivity DISABLED - was causing timeouts")
+        
+        # REMOVED: Response Relevancy (requires embeddings and not in core 5 metrics)
+        self.response_relevancy = None
+        print("⚠️ RAGAS Response Relevancy DISABLED - not in core 5 metrics")
 
     async def _safe_evaluate_metric(self, metric, sample, metric_name: str, timeout: int = 60) -> Dict[str, Any]:
         """
@@ -333,7 +322,6 @@ class RAGASEvalPipeline:
         """Evaluate context precision with enhanced error handling"""
         sample = SingleTurnSample(
             user_input=question,
-            reference=reference_answer,
             response=generated_answer,
             retrieved_contexts=[context]
         )
@@ -341,18 +329,18 @@ class RAGASEvalPipeline:
             self.context_precision, sample, "Context Precision"
         )
 
-    async def evaluate_context_entity_recall(self, question: str, reference_answer: str, 
-                                           generated_answer: str, context: str) -> Dict[str, Any]:
-        """Evaluate context entity recall with enhanced error handling"""
-        sample = SingleTurnSample(
-            user_input=question,
-            reference=reference_answer,
-            response=generated_answer,
-            retrieved_contexts=[context]
-        )
-        return await self._safe_evaluate_metric(
-            self.context_entity_recall, sample, "Context Entity Recall"
-        )
+    # async def evaluate_context_entity_recall(self, question: str, reference_answer: str, 
+    #                                        generated_answer: str, context: str) -> Dict[str, Any]:
+    #     """Evaluate context entity recall with enhanced error handling"""
+    #     sample = SingleTurnSample(
+    #         user_input=question,
+    #         reference=reference_answer,
+    #         response=generated_answer,
+    #         retrieved_contexts=[context]
+    #     )
+    #     return await self._safe_evaluate_metric(
+    #         self.context_entity_recall, sample, "Context Entity Recall"
+    #     )
 
     async def evaluate_faithfulness(self, question: str, generated_answer: str, context: str) -> Dict[str, Any]:
         """Evaluate faithfulness with enhanced error handling"""
@@ -377,39 +365,51 @@ class RAGASEvalPipeline:
         return await self._safe_evaluate_metric(
             self.factual_correctness, sample, "Factual Correctness"
         )
-
-    async def evaluate_noise_sensitivity(self, question: str, reference_answer: str, 
-                                       generated_answer: str, context: str) -> Dict[str, Any]:
-        """Evaluate noise sensitivity with enhanced error handling and shorter timeout"""
+    
+    async def evaluate_answer_accuracy(self, question: str, reference_answer: str, 
+                                       generated_answer: str) -> Dict[str, Any]:
+        """Evaluate answer accuracy with enhanced error handling"""
         sample = SingleTurnSample(
             user_input=question,
             reference=reference_answer,
-            response=generated_answer,
-            retrieved_contexts=[context]
+            response=generated_answer
         )
-        # Use shorter timeout for noise sensitivity as it's been problematic
         return await self._safe_evaluate_metric(
-            self.noise_sensitivity, sample, "Noise Sensitivity", timeout=30
+            self.answer_accuracy, sample, "Answer Accuracy"
         )
 
-    async def evaluate_response_relevancy(self, question: str, generated_answer: str, 
-                                        context: str) -> Dict[str, Any]:
-        """Evaluate response relevancy with enhanced error handling"""
-        if not self.response_relevancy:
-            return {
-                "score": 0.0,
-                "description": "Response Relevancy evaluation requires embeddings model",
-                "error": "No embeddings model provided"
-            }
+    # async def evaluate_noise_sensitivity(self, question: str, reference_answer: str, 
+    #                                    generated_answer: str, context: str) -> Dict[str, Any]:
+    #     """Evaluate noise sensitivity with enhanced error handling and shorter timeout"""
+    #     sample = SingleTurnSample(
+    #         user_input=question,
+    #         reference=reference_answer,
+    #         response=generated_answer,
+    #         retrieved_contexts=[context]
+    #     )
+    #     # Use shorter timeout for noise sensitivity as it's been problematic
+    #     return await self._safe_evaluate_metric(
+    #         self.noise_sensitivity, sample, "Noise Sensitivity", timeout=30
+    #     )
+
+    # async def evaluate_response_relevancy(self, question: str, generated_answer: str, 
+    #                                     context: str) -> Dict[str, Any]:
+    #     """Evaluate response relevancy with enhanced error handling"""
+    #     if not self.response_relevancy:
+    #         return {
+    #             "score": 0.0,
+    #             "description": "Response Relevancy evaluation requires embeddings model",
+    #             "error": "No embeddings model provided"
+    #         }
             
-        sample = SingleTurnSample(
-            user_input=question,
-            response=generated_answer,
-            retrieved_contexts=[context]
-        )
-        return await self._safe_evaluate_metric(
-            self.response_relevancy, sample, "Response Relevancy"
-        )
+    #     sample = SingleTurnSample(
+    #         user_input=question,
+    #         response=generated_answer,
+    #         retrieved_contexts=[context]
+    #     )
+    #     return await self._safe_evaluate_metric(
+    #         self.response_relevancy, sample, "Response Relevancy"
+    #     )
 
     async def evaluate_all(self, question: str, reference_answer: str, 
                           generated_answer: str, context: str) -> Dict[str, Any]:
@@ -431,9 +431,9 @@ class RAGASEvalPipeline:
             tasks.append(self.evaluate_context_precision(question, reference_answer, generated_answer, context))
             task_names.append("context_precision")
         
-        if self.context_entity_recall:
-            tasks.append(self.evaluate_context_entity_recall(question, reference_answer, generated_answer, context))
-            task_names.append("context_entity_recall")
+        # if self.context_entity_recall:
+        #     tasks.append(self.evaluate_context_entity_recall(question, reference_answer, generated_answer, context))
+        #     task_names.append("context_entity_recall")
         
         if self.faithfulness:
             tasks.append(self.evaluate_faithfulness(question, generated_answer, context))
@@ -442,14 +442,10 @@ class RAGASEvalPipeline:
         if self.factual_correctness:
             tasks.append(self.evaluate_factual_correctness(question, reference_answer, generated_answer, context))
             task_names.append("factual_correctness")
-        
-        if self.noise_sensitivity:
-            tasks.append(self.evaluate_noise_sensitivity(question, reference_answer, generated_answer, context))
-            task_names.append("noise_sensitivity")
-        
-        if self.response_relevancy:
-            tasks.append(self.evaluate_response_relevancy(question, generated_answer, context))
-            task_names.append("response_relevancy")
+
+        if self.answer_accuracy:
+            tasks.append(self.evaluate_answer_accuracy(question, reference_answer, generated_answer))
+            task_names.append("answer_accuracy")
         
         # Execute all tasks concurrently
         results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -474,9 +470,9 @@ class RAGASEvalPipeline:
                 else:
                     failed_evaluations += 1
         
-        # Add metrics that weren't initialized
-        all_metrics = ["context_recall", "context_precision", "context_entity_recall", 
-                      "faithfulness", "factual_correctness", "noise_sensitivity", "response_relevancy"]
+        # Add metrics that weren't initialized (only the 5 core metrics) ["context_entity_recall"]
+        all_metrics = ["context_recall", "context_precision", 
+                      "faithfulness", "factual_correctness", "answer_accuracy"]
         
         for metric_name in all_metrics:
             if metric_name not in evaluation_results:
@@ -532,11 +528,10 @@ class RAGASEvalPipeline:
                     "evaluation": {
                         "context_recall": {"score": 0.0, "error": str(e)},
                         "context_precision": {"score": 0.0, "error": str(e)},
-                        "context_entity_recall": {"score": 0.0, "error": str(e)},
+                        # "context_entity_recall": {"score": 0.0, "error": str(e)},
                         "faithfulness": {"score": 0.0, "error": str(e)},
                         "factual_correctness": {"score": 0.0, "error": str(e)},
-                        "noise_sensitivity": {"score": 0.0, "error": str(e)},
-                        "response_relevancy": {"score": 0.0, "error": str(e)}
+                        "answer_accuracy": {"score": 0.0, "error": str(e)}
                     }
                 }
                 results.append(error_result)
@@ -615,15 +610,14 @@ class RAGASEvalPipeline:
         if not evaluation_results:
             return {}
             
-        # Initialize score lists for all metrics
+        # Initialize score lists for the 5 core metrics only
         score_lists = {
             "context_recall": [],
             "context_precision": [],
-            "context_entity_recall": [],
+            # "context_entity_recall": [],
             "faithfulness": [],
             "factual_correctness": [],
-            "noise_sensitivity": [],
-            "response_relevancy": []
+            "answer_accuracy": []
         }
         
         for result in evaluation_results:
@@ -654,12 +648,13 @@ class RAGASEvalPipeline:
         """Get descriptions of all available RAGAS metrics."""
         return {
             "context_recall": "Measures how much of the relevant information from the reference is captured in the retrieved context. Higher values indicate better retrieval completeness.",
-            "context_precision": "Measures the precision of retrieved context by evaluating what proportion of the retrieved context is relevant to answering the question.",
-            "context_entity_recall": "Measures recall based on entities present in ground truth and context. Useful for entity-focused legal applications.",
+            "context_precision": "Measures the precision of retrieved context by evaluating what proportion of the retrieved context is relevant to the generated answer. Uses LLM to compare retrieved contexts with the response.",
+            # "context_entity_recall": "Measures recall based on entities present in ground truth and context. Useful for entity-focused legal applications.",
             "faithfulness": "Measures the factual consistency of the generated answer against the retrieved context. Higher values indicate less hallucination.",
             "factual_correctness": "Measures the factual accuracy of the generated answer compared to the reference answer using high atomicity and coverage for detailed legal analysis.",
-            "noise_sensitivity": "Measures how robust the system is to irrelevant or noisy information in the retrieved context.",
-            "response_relevancy": "Measures how relevant and focused the generated answer is to the input question. Higher values indicate more relevant responses."
+            # "noise_sensitivity": "Measures how robust the system is to irrelevant or noisy information in the retrieved context.",
+            # "response_relevancy": "Measures how relevant and focused the generated answer is to the input question. Higher values indicate more relevant responses."
+            "answer_accuracy": "Measures the accuracy of the generated answer compared to the reference answer. Higher values indicate more accurate answers."
         }
 
     def get_factual_correctness_config(self) -> Dict[str, Any]:
@@ -667,7 +662,7 @@ class RAGASEvalPipeline:
         return {
             "mode": "f1",
             "beta": 1.0,
-            "atomicity": "high",
+            "atomicity": "low",
             "coverage": "high",
             "description": "Optimized for legal Q&A with detailed claim decomposition and comprehensive coverage"
         }

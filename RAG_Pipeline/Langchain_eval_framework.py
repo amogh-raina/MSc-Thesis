@@ -3,37 +3,28 @@ from typing import Dict, Any, Optional, List
 import json
 import re
 
-### LANGCHAIN RAG EVALUATION FRAMEWORK
+### LANGCHAIN RAG EVALUATION FRAMEWORK - REFACTORED TO USE LLM JUDGE
 # 
-# Note: This framework uses step-by-step reasoning prompts to improve evaluation quality.
-# The explanations are generated internally but can be excluded from exports for zero-shot Q&A systems.
-# The prompts encourage the model to "think" through the evaluation process for better accuracy.
+# Note: This framework now uses a single comprehensive LLM Judge approach instead of
+# multiple separate evaluation prompts. Uses the complete judge prompt with few-shot examples.
 
-class CorrectnessGrade(TypedDict):
-    """Grade schema for correctness evaluation"""
-    explanation: Annotated[str, ..., "Explain your reasoning for the score"]
-    score: Annotated[int, ..., "Score on a scale of 1-5, where 1 is the lowest and 5 is the highest"]
-
-class RelevanceGrade(TypedDict):
-    """Grade schema for relevance evaluation"""
-    explanation: Annotated[str, ..., "Explain your reasoning for the score"]
-    score: Annotated[int, ..., "Score on a scale of 1-5, where 1 is the lowest and 5 is the highest"]
-
-class GroundedGrade(TypedDict):
-    """Grade schema for groundedness evaluation"""
-    explanation: Annotated[str, ..., "Explain your reasoning for the score"]
-    score: Annotated[int, ..., "Score on a scale of 1-5, where 1 is the lowest and 5 is the highest"]
-
-class RetrievalRelevanceGrade(TypedDict):
-    """Grade schema for retrieval relevance evaluation"""
-    explanation: Annotated[str, ..., "Explain your reasoning for the score"]
-    score: Annotated[int, ..., "Score on a scale of 1-5, where 1 is the lowest and 5 is the highest"]
+class JudgeGrade(TypedDict):
+    """Grade schema for LLM Judge evaluation"""
+    accuracy: Annotated[int, ..., "Score on a scale of 1-5 for accuracy"]
+    accuracy_reason: Annotated[str, ..., "Brief justification for accuracy score"]
+    completeness: Annotated[int, ..., "Score on a scale of 1-5 for completeness"]
+    completeness_reason: Annotated[str, ..., "Brief justification for completeness score"]
+    relevance: Annotated[int, ..., "Score on a scale of 1-5 for relevance"]
+    relevance_reason: Annotated[str, ..., "Brief justification for relevance score"]
+    overall: Annotated[int, ..., "Score on a scale of 1-5 for overall performance"]
+    overall_reason: Annotated[str, ..., "Brief justification for overall score"]
 
 class LangchainEvalPipeline:
     """
-    LangChain RAG Evaluation Pipeline
-    Evaluates RAG responses using four key metrics: correctness, relevance, groundedness, and retrieval relevance
-    Based on: https://docs.smith.langchain.com/evaluation/tutorials/rag
+    LangChain RAG Evaluation Pipeline - Refactored to use LLM Judge
+    Evaluates RAG responses using a single comprehensive prompt with four key metrics:
+    accuracy, completeness, relevance, and overall performance
+    Based on legal domain-specific evaluation criteria with few-shot examples
     """
     
     def __init__(self, evaluator_llm):
@@ -44,49 +35,170 @@ class LangchainEvalPipeline:
             evaluator_llm: The LLM model to use for evaluation (e.g., ChatOpenAI, ChatGroq, etc.)
         """
         self.evaluator_llm = evaluator_llm
+        self.judge_prompt = self._get_complete_judge_prompt()
     
-    def evaluate_correctness(self, question: str, reference_answer: str, generated_answer: str) -> Dict[str, Any]:
+    def _get_complete_judge_prompt(self) -> str:
         """
-        Evaluate correctness: How factually accurate is the generated answer compared to the reference?
+        Return the complete judge prompt exactly as specified in judge_prompt.md
+        """
+        return """## Prompt for Automated LLM Judge
+
+### Persona / Role
+
+You are an expert legal professor specialized in EU law with deep experience grading legal-theory assessments. Your task is to objectively evaluate the quality of short-answer responses by strictly adhering to the evaluation rubric. Provide precise, justified ratings.
+
+---
+
+### Task Description
+
+You will evaluate answers to legal-theory questions. Each task shows:
+
+- **Question**: The legal-theory question.
+- **Answer 1 (Reference)**: The correct benchmark response (general legal reasoning, broad citations).
+- **Answer 2 (Submitted)**: The response you will evaluate (explicit citations using case titles, CELEX IDs, paragraph numbers).
+
+Evaluate Answer 2 by comparing it strictly against Answer 1 using the rubric dimensions defined below. Provide ratings from 1-5 for each dimension with a brief justification (one concise sentence per dimension).
+
+Focus on the rubric criteria along with the writing style. Verify citations carefully if provided (check citation accuracy and relevance).
+
+Output must follow the exact JSON schema provided at the end.
+
+---
+
+### Rubric Dimensions & Definitions
+
+#### 1. Accuracy
+
+How precise and legally correct is the answer compared to the reference?
+
+- **1 (Very Poor)** - Major inaccuracies, incorrect legal points, or false/missing citations.
+- **2 (Poor)** - Several errors; some points accurate but key legal elements or citations are substantially wrong.
+- **3 (Moderate)** - Mostly accurate; minor inaccuracies or slightly vague legal phrasing.
+- **4 (Good)** - Highly accurate; minor or trivial errors, no significant legal inaccuracies.
+- **5 (Excellent)** - Completely accurate; perfectly matches all legal points and citations in the reference.
+
+#### 2. Completeness
+
+How fully does the submitted answer cover all relevant issues compared to the reference?
+
+- **1 (Very Poor)** - Severe omission of key points; addresses few or none of the essential issues.
+- **2 (Poor)** - Covers some important issues but misses multiple significant aspects or nuances.
+- **3 (Moderate)** - Addresses most critical issues but misses some secondary or nuanced points.
+- **4 (Good)** - Almost fully complete; minor gaps in detail compared to the reference.
+- **5 (Excellent)** - Fully comprehensive; covers every issue as thoroughly as the reference.
+
+#### 3. Relevance
+
+How closely does the answer stay on topic and address precisely what was asked?
+
+- **1 (Very Poor)** - Mostly irrelevant; largely off-topic or unrelated to the question.
+- **2 (Poor)** - Contains substantial irrelevant or off-topic content despite some relevant points.
+- **3 (Moderate)** - Generally relevant; minor digressions or somewhat off-topic details.
+- **4 (Good)** - Closely relevant; minimal negligible digressions.
+- **5 (Excellent)** - Entirely on topic; each part directly addresses the question precisely.
+
+#### 4. Overall Performance
+
+General impression; how well does the submitted answer match the reference answer overall?
+
+- **1 (Very Poor)** - Clearly inadequate; significant inaccuracies, irrelevancies, and omissions.
+- **2 (Poor)** - Below expectations; multiple noticeable deficiencies.
+- **3 (Moderate)** - Adequate; broadly aligns but has clear errors or gaps.
+- **4 (Good)** - Strong; closely aligns with the reference, minor and trivial deficiencies only.
+- **5 (Excellent)** - Outstanding; matches the reference perfectly across all dimensions.
+
+---
+
+### Scenario-Based Few-shot Examples
+
+> **Format note**\
+> In each example the *Reference Answer* cites the legal authority **in a narrative way** (e.g. just the case name or doctrinal description), whereas the *Submitted Answer* follows the RAG style (case title in quotation marks + CELEX ID + optional paragraph number). Your job is to judge substance, not formatting; extra pinpoint citations in the Submitted Answer are welcome **as long as they are correct**.
+
+**Example 1 - Excellent match**
+
+- **Question**: Can EU Member States reserve jobs in the public administration exclusively for nationals?
+- **Reference Answer** (benchmark): Posts may be restricted to nationals only if they involve the exercise of public authority or safeguarding the State's general interest as interpreted narrowly by the Court in its public-service case-law.
+- **Submitted Answer** (to be scored): Under Article 45(4) TFEU, posts can be reserved for nationals solely where they involve the exercise of public authority. "Commission v Belgium" (#62001CJ0473, paragraph 39) confirms that purely administrative roles must remain open to all EU citizens, so a blanket nationality bar is unlawful.
+- **Gold Ratings** (illustrative):
+  - Accuracy 5 - The legal rule and citation are both correct.
+  - Completeness 5 - Covers the narrow scope of the exception and its doctrinal source.
+  - Relevance 5 - Fully on-point.
+  - Overall 5 - Perfect alignment.
+
+**Example 2 - Moderate match**
+
+- **Question**: Do disproportionate language requirements in private employment breach EU free-movement rules?
+- **Reference Answer**: Disproportionate or unnecessary language tests can amount to indirect discrimination contrary to Article 45 TFEU; legitimate requirements must be strictly proportionate.
+- **Submitted Answer**: Language conditions are acceptable only if objectively justified. In "Groener" (#61987CJ0379, paragraph 19) the Court upheld a requirement linked to the job's teaching duties, showing that disproportionate tests would violate Article 45.
+- **Gold Ratings** (illustrative):
+  - Accuracy 4 - States the core rule accurately but gives only one example case and omits indirect-discrimination wording.
+  - Completeness 3 - Misses the proportionality balancing and alternative-means test present in the reference.
+  - Relevance 5 - Stays exactly on topic.
+  - Overall 4 - Good but with notable gaps.
+
+**Example 3 - Poor match**
+
+- **Question**: Does moving from full-time to genuine part-time work strip an EU citizen of 'worker' status?
+- **Reference Answer**: No. Part-time workers remain 'workers' so long as their activity is genuine and effective, not marginal or ancillary (Levin; Kempf).
+- **Submitted Answer**: Switching to part-time automatically ends worker status under EU law, as shown in "Commission v Netherlands" (#62010CJ0542, paragraph 12).
+- **Gold Ratings** (illustrative):
+  - Accuracy 1 - Misstates the rule and cites an irrelevant case.
+  - Completeness 1 - Omits the genuine-and-effective test entirely.
+  - Relevance 2 - Mentions free movement but reaches the opposite conclusion.
+  - Overall 1 - Substantially wrong.
+
+---
+
+### Explicit Guardrails / Rules
+
+- **Do NOT penalise stylistic differences**. Extra precision in citations (e.g. CELEX IDs, paragraph numbers) is positive *if correct*.
+- **Do NOT invent or assume information.** Judge only what is written.
+- **If a Submitted citation looks fabricated or mismatched** (case does not support the proposition, wrong paragraph, non-existent CELEX), downgrade *Accuracy*.
+- **Remain within the 1-5 integer scale** for every metric.
+- **Output ONLY the JSON object - no prose, no markdown.**
+
+---
+
+### Output JSON Schema (strictly follow)
+
+```json
+{
+  "accuracy": <int>,
+  "accuracy_reason": "<brief justification sentence>",
+  "completeness": <int>,
+  "completeness_reason": "<brief justification sentence>",
+  "relevance": <int>,
+  "relevance_reason": "<brief justification sentence>",
+  "overall": <int>,
+  "overall_reason": "<brief justification sentence>"
+}
+```"""
+
+    def evaluate_all(self, question: str, reference_answer: str, generated_answer: str, context: str = None) -> Dict[str, Any]:
+        """
+        Run comprehensive LLM Judge evaluation using single prompt
         
         Args:
             question: The original question
             reference_answer: The ground truth answer
             generated_answer: The LLM-generated answer
+            context: The retrieved context (not used in judge approach but kept for compatibility)
             
         Returns:
-            Dict containing explanation and score (1-5)
+            Dict containing all evaluation results in the same format as before
         """
-        correctness_instructions = """You are a law teacher grading a quiz. 
+        
+        # Format the evaluation prompt with the specific answers
+        evaluation_content = f"""**Question**: {question}
 
-        You will be given a QUESTION, the GROUND TRUTH (correct) ANSWER, and the STUDENT ANSWER. 
+**Answer 1 (Reference)**: {reference_answer}
 
-        Here is the grade criteria to follow:
-        (1) Grade the student answers based ONLY on their factual accuracy relative to the ground truth answer. 
-        (2) Ensure that the student answer does not contain any conflicting statements.
-(3) It is OK if the student answer contains more information than the ground truth answer, as long as it is factually accurate relative to the ground truth answer.
-
-Correctness Scoring (1-5 scale):
-- 5: Completely accurate, comprehensive, and well-grounded in legal sources
-- 4: Mostly accurate with minor gaps or imprecisions
-- 3: Generally accurate but missing some key points or has minor errors
-- 2: Partially accurate but contains significant errors or omissions
-- 1: Largely inaccurate or contains major factual errors
-
-        Explain your reasoning in a step-by-step manner to ensure your reasoning and conclusion are correct. 
-
-Avoid simply stating the correct answer at the outset.
-
-Please respond in JSON format with 'explanation' and 'score' fields."""
-
-        prompt_content = f"""QUESTION: {question}
-        GROUND TRUTH ANSWER: {reference_answer}
-        STUDENT ANSWER: {generated_answer}"""
+**Answer 2 (Submitted)**: {generated_answer}"""
 
         try:
             response = self.evaluator_llm.invoke([
-                {"role": "system", "content": correctness_instructions}, 
-                {"role": "user", "content": prompt_content}
+                {"role": "system", "content": self.judge_prompt},
+                {"role": "user", "content": evaluation_content}
             ])
             
             # Parse response - handle both string and structured responses
@@ -95,230 +207,99 @@ Please respond in JSON format with 'explanation' and 'score' fields."""
             else:
                 response_text = str(response)
             
-            # Try to extract JSON from response
-            result = self._parse_evaluation_response(response_text, default_score=3)
+            # Parse the JSON response
+            judge_result = self._parse_judge_response(response_text)
+            
+            # Convert to the original format for backward compatibility
             return {
-                "explanation": result.get("explanation", "No explanation provided"),
-                "score": result.get("score", 3),
-                "raw_response": response_text
+                "correctness": {
+                    "explanation": judge_result.get("accuracy_reason", "No explanation provided"),
+                    "score": judge_result.get("accuracy", 3),
+                    "raw_response": response_text
+                },
+                "relevance": {
+                    "explanation": judge_result.get("relevance_reason", "No explanation provided"),
+                    "score": judge_result.get("relevance", 3),
+                    "raw_response": response_text
+                },
+                "groundedness": {
+                    "explanation": judge_result.get("completeness_reason", "No explanation provided"),
+                    "score": judge_result.get("completeness", 3),
+                    "raw_response": response_text
+                },
+                "retrieval_relevance": {
+                    "explanation": judge_result.get("overall_reason", "No explanation provided"),
+                    "score": judge_result.get("overall", 3),
+                    "raw_response": response_text
+                }
             }
             
         except Exception as e:
             return {
-                "explanation": f"Error during evaluation: {str(e)}",
-                "score": 3,
-                "error": str(e)
+                "correctness": {"explanation": f"Error during evaluation: {str(e)}", "score": 3, "error": str(e)},
+                "relevance": {"explanation": f"Error during evaluation: {str(e)}", "score": 3, "error": str(e)},
+                "groundedness": {"explanation": f"Error during evaluation: {str(e)}", "score": 3, "error": str(e)},
+                "retrieval_relevance": {"explanation": f"Error during evaluation: {str(e)}", "score": 3, "error": str(e)}
             }
 
-    def evaluate_relevance(self, question: str, generated_answer: str) -> Dict[str, Any]:
+    def judge_evaluate(self, question: str, reference_answer: str, generated_answer: str) -> Dict[str, Any]:
         """
-        Evaluate relevance: Does the generated answer address the question appropriately?
-        
-        Args:
-            question: The original question
-            generated_answer: The LLM-generated answer
-            
-        Returns:
-            Dict containing explanation and score (1-5)
-        """
-        relevance_instructions = """You are a law teacher grading a quiz. 
-
-        You will be given a QUESTION and a STUDENT ANSWER. 
-
-        Here is the grade criteria to follow:
-(1) Evaluate how well the STUDENT ANSWER addresses the QUESTION
-(2) Consider whether the answer stays within the scope of the question
-(3) Assess the level of detail and comprehensiveness in addressing the question
-(4) Check if the answer provides useful information that helps answer the question
-
-Relevance Scoring (1-5 scale):
-- 5: Perfectly addresses the question with comprehensive, focused, and highly relevant information
-- 4: Mostly addresses the question well with minor scope issues or slight lack of detail
-- 3: Generally addresses the question but may have some scope drift or missing elements
-- 2: Partially addresses the question with significant scope issues or limited relevance
-- 1: Poorly addresses the question, largely off-topic, or provides irrelevant information
-
-        Explain your reasoning in a step-by-step manner to ensure your reasoning and conclusion are correct. 
-
-Avoid simply stating the correct answer at the outset.
-
-Please respond in JSON format with 'explanation' and 'score' fields."""
-
-        prompt_content = f"QUESTION: {question}\nSTUDENT ANSWER: {generated_answer}"
-        
-        try:
-            response = self.evaluator_llm.invoke([
-            {"role": "system", "content": relevance_instructions}, 
-                {"role": "user", "content": prompt_content}
-            ])
-            
-            if hasattr(response, 'content'):
-                response_text = response.content
-            else:
-                response_text = str(response)
-            
-            result = self._parse_evaluation_response(response_text, default_score=3)
-            return {
-                "explanation": result.get("explanation", "No explanation provided"),
-                "score": result.get("score", 3),
-                "raw_response": response_text
-            }
-            
-        except Exception as e:
-            return {
-                "explanation": f"Error during evaluation: {str(e)}",
-                "score": 3,
-                "error": str(e)
-            }
-
-    def evaluate_groundedness(self, generated_answer: str, context: str) -> Dict[str, Any]:
-        """
-        Evaluate groundedness: Is the generated answer supported by the retrieved context?
-        
-        Args:
-            generated_answer: The LLM-generated answer
-            context: The retrieved context/documents
-            
-        Returns:
-            Dict containing explanation and score (1-5)
-        """
-        grounded_instructions = """You are a teacher grading a quiz. 
-
-You will be given FACTS and a STUDENT ANSWER. 
-
-Here is the grade criteria to follow:
-(1) Evaluate how well the STUDENT ANSWER is grounded in the provided FACTS
-(2) Assess the extent to which the answer relies on factual information from the context
-(3) Check for any "hallucinated" information that goes beyond the provided facts
-(4) Consider the balance between factual grounding and reasonable inference
-
-Groundedness Scoring (1-5 scale):
-- 5: Completely grounded in the facts with no hallucination, all claims directly supported
-- 4: Mostly grounded with minor inferences that are reasonable and consistent with facts
-- 3: Generally grounded but may include some reasonable inferences or minor gaps
-- 2: Partially grounded with some unsupported claims or significant gaps in factual support
-- 1: Poorly grounded with substantial hallucination or claims not supported by the facts
-
-Explain your reasoning in a step-by-step manner to ensure your reasoning and conclusion are correct. 
-
-Avoid simply stating the correct answer at the outset.
-
-Please respond in JSON format with 'explanation' and 'score' fields."""
-
-        prompt_content = f"FACTS: {context}\nSTUDENT ANSWER: {generated_answer}"
-        
-        try:
-            response = self.evaluator_llm.invoke([
-                {"role": "system", "content": grounded_instructions}, 
-                {"role": "user", "content": prompt_content}
-            ])
-            
-            if hasattr(response, 'content'):
-                response_text = response.content
-            else:
-                response_text = str(response)
-            
-            result = self._parse_evaluation_response(response_text, default_score=3)
-            return {
-                "explanation": result.get("explanation", "No explanation provided"),
-                "score": result.get("score", 3),
-                "raw_response": response_text
-            }
-            
-        except Exception as e:
-            return {
-                "explanation": f"Error during evaluation: {str(e)}",
-                "score": 3,
-                "error": str(e)
-            }
-
-    def evaluate_retrieval_relevance(self, question: str, context: str) -> Dict[str, Any]:
-        """
-        Evaluate retrieval relevance: Are the retrieved documents relevant to the question?
-        
-        Args:
-            question: The original question
-            context: The retrieved context/documents
-            
-        Returns:
-            Dict containing explanation and score (1-5)
-        """
-        retrieval_relevance_instructions = """You are a teacher grading a quiz. 
-
-You will be given a QUESTION and a set of FACTS provided by the student. 
-
-Here is the grade criteria to follow:
-(1) Evaluate how relevant the retrieved FACTS are to the QUESTION
-(2) Assess the quality and comprehensiveness of the retrieved information
-(3) Consider whether the facts contain key information needed to answer the question
-(4) Check if the retrieval captured the most important aspects of the question
-
-Retrieval Relevance Scoring (1-5 scale):
-- 5: Perfectly relevant facts that comprehensively address all aspects of the question
-- 4: Highly relevant facts that address most aspects of the question with minor gaps
-- 3: Generally relevant facts that address some aspects but may miss key elements
-- 2: Partially relevant facts with significant gaps or limited coverage of the question
-- 1: Poorly relevant facts that largely miss the point or provide irrelevant information
-
-Explain your reasoning in a step-by-step manner to ensure your reasoning and conclusion are correct. 
-
-Avoid simply stating the correct answer at the outset.
-
-Please respond in JSON format with 'explanation' and 'score' fields."""
-
-        prompt_content = f"FACTS: {context}\nQUESTION: {question}"
-        
-        try:
-            response = self.evaluator_llm.invoke([
-                {"role": "system", "content": retrieval_relevance_instructions}, 
-                {"role": "user", "content": prompt_content}
-            ])
-            
-            if hasattr(response, 'content'):
-                response_text = response.content
-            else:
-                response_text = str(response)
-            
-            result = self._parse_evaluation_response(response_text, default_score=3)
-            return {
-                "explanation": result.get("explanation", "No explanation provided"),
-                "score": result.get("score", 3),
-                "raw_response": response_text
-            }
-            
-        except Exception as e:
-            return {
-                "explanation": f"Error during evaluation: {str(e)}",
-                "score": 3,
-                "error": str(e)
-            }
-
-    def evaluate_all(self, question: str, reference_answer: str, generated_answer: str, context: str) -> Dict[str, Any]:
-        """
-        Run all four RAG evaluation metrics
+        New method for direct judge evaluation (returns native judge format)
         
         Args:
             question: The original question
             reference_answer: The ground truth answer
             generated_answer: The LLM-generated answer
-            context: The retrieved context/documents
             
         Returns:
-            Dict containing all evaluation results
+            Dict containing judge evaluation results in native format
         """
-        return {
-            "correctness": self.evaluate_correctness(question, reference_answer, generated_answer),
-            "relevance": self.evaluate_relevance(question, generated_answer),
-            "groundedness": self.evaluate_groundedness(generated_answer, context),
-            "retrieval_relevance": self.evaluate_retrieval_relevance(question, context)
-        }
+        
+        # Format the evaluation prompt with the specific answers
+        evaluation_content = f"""**Question**: {question}
+
+**Answer 1 (Reference)**: {reference_answer}
+
+**Answer 2 (Submitted)**: {generated_answer}"""
+
+        try:
+            response = self.evaluator_llm.invoke([
+                {"role": "system", "content": self.judge_prompt},
+                {"role": "user", "content": evaluation_content}
+            ])
+            
+            # Parse response - handle both string and structured responses
+            if hasattr(response, 'content'):
+                response_text = response.content
+            else:
+                response_text = str(response)
+            
+            # Parse the JSON response
+            result = self._parse_judge_response(response_text)
+            result["raw_response"] = response_text
+            
+            return result
+            
+        except Exception as e:
+            return {
+                "accuracy": 3,
+                "accuracy_reason": f"Error during evaluation: {str(e)}",
+                "completeness": 3,
+                "completeness_reason": f"Error during evaluation: {str(e)}",
+                "relevance": 3,
+                "relevance_reason": f"Error during evaluation: {str(e)}",
+                "overall": 3,
+                "overall_reason": f"Error during evaluation: {str(e)}",
+                "error": str(e),
+                "raw_response": ""
+            }
 
     def batch_evaluate(self, samples: List[Dict[str, str]]) -> List[Dict[str, Any]]:
         """
-        Evaluate a batch of samples
+        Evaluate a batch of samples using LLM Judge
         
         Args:
-            samples: List of dicts, each containing 'question', 'reference_answer', 'generated_answer', 'context'
+            samples: List of dicts, each containing 'question', 'reference_answer', 'generated_answer'
             
         Returns:
             List of evaluation results
@@ -360,16 +341,15 @@ Please respond in JSON format with 'explanation' and 'score' fields."""
         
         return results
 
-    def _parse_evaluation_response(self, response_text: str, **defaults) -> Dict[str, Any]:
+    def _parse_judge_response(self, response_text: str) -> Dict[str, Any]:
         """
-        Parse evaluation response, handling both JSON and plain text responses
+        Parse the LLM Judge response to extract scores and reasons
         
         Args:
             response_text: The raw response from the LLM
-            **defaults: Default values for different metrics
             
         Returns:
-            Parsed evaluation dict
+            Parsed evaluation dict with scores and reasons
         """
         try:
             # Try to parse as JSON first
@@ -378,42 +358,57 @@ Please respond in JSON format with 'explanation' and 'score' fields."""
                 start = response_text.find('{')
                 end = response_text.rfind('}') + 1
                 json_part = response_text[start:end]
-                return json.loads(json_part)
-        except:
+                
+                parsed = json.loads(json_part)
+                
+                # Validate that all required fields are present
+                required_fields = [
+                    "accuracy", "accuracy_reason",
+                    "completeness", "completeness_reason", 
+                    "relevance", "relevance_reason",
+                    "overall", "overall_reason"
+                ]
+                
+                if all(field in parsed for field in required_fields):
+                    # Ensure scores are integers between 1-5
+                    for score_field in ["accuracy", "completeness", "relevance", "overall"]:
+                        if not isinstance(parsed[score_field], int) or not (1 <= parsed[score_field] <= 5):
+                            parsed[score_field] = 3  # Default fallback
+                    
+                    return parsed
+                    
+        except json.JSONDecodeError:
             pass
         
-        # Fallback: try to extract values from text
+        # Fallback: try to extract values from text using regex
         result = {}
         
-        # Extract explanation (look for common patterns)
-        if "explanation" in response_text.lower():
-            lines = response_text.split('\n')
-            explanation_lines = []
-            capture = False
-            for line in lines:
-                if "explanation" in line.lower():
-                    capture = True
-                    explanation_lines.append(line.split(':', 1)[-1].strip())
-                elif capture and line.strip():
-                    explanation_lines.append(line.strip())
-                elif capture and not line.strip():
-                    break
-            result["explanation"] = " ".join(explanation_lines) if explanation_lines else response_text
-        else:
-            result["explanation"] = response_text
+        # Extract scores and reasons using regex patterns
+        patterns = {
+            "accuracy": r'"accuracy":\s*(\d+)',
+            "accuracy_reason": r'"accuracy_reason":\s*"([^"]+)"',
+            "completeness": r'"completeness":\s*(\d+)',
+            "completeness_reason": r'"completeness_reason":\s*"([^"]+)"',
+            "relevance": r'"relevance":\s*(\d+)',
+            "relevance_reason": r'"relevance_reason":\s*"([^"]+)"',
+            "overall": r'"overall":\s*(\d+)',
+            "overall_reason": r'"overall_reason":\s*"([^"]+)"'
+        }
         
-        # Extract score (1-5) - all metrics now use scoring
-        if "default_score" in defaults:
-            score_match = re.search(r'score["\s:]*(\d)', response_text.lower())
-            if score_match:
-                score = int(score_match.group(1))
-                # Ensure score is within valid range
-                if 1 <= score <= 5:
-                    result["score"] = score
+        for field, pattern in patterns.items():
+            match = re.search(pattern, response_text, re.IGNORECASE)
+            if match:
+                if field.endswith("_reason"):
+                    result[field] = match.group(1)
                 else:
-                    result["score"] = defaults["default_score"]
+                    score = int(match.group(1))
+                    result[field] = score if 1 <= score <= 5 else 3
             else:
-                result["score"] = defaults["default_score"]
+                # Provide defaults for missing fields
+                if field.endswith("_reason"):
+                    result[field] = "Unable to parse reason from response"
+                else:
+                    result[field] = 3
         
         return result
 
@@ -469,6 +464,43 @@ Please respond in JSON format with 'explanation' and 'score' fields."""
             aggregates["avg_retrieval_relevance"] = sum(retrieval_relevance_scores) / len(retrieval_relevance_scores)
         
         return aggregates
+
+    # Legacy methods preserved for backward compatibility but now call judge evaluation
+    def evaluate_correctness(self, question: str, reference_answer: str, generated_answer: str) -> Dict[str, Any]:
+        """Legacy method - now uses judge evaluation"""
+        judge_result = self.judge_evaluate(question, reference_answer, generated_answer)
+        return {
+            "explanation": judge_result.get("accuracy_reason", "No explanation provided"),
+            "score": judge_result.get("accuracy", 3),
+            "raw_response": judge_result.get("raw_response", "")
+        }
+
+    def evaluate_relevance(self, question: str, generated_answer: str) -> Dict[str, Any]:
+        """Legacy method - now uses judge evaluation (requires reference answer)"""
+        # Note: This method now requires reference_answer, breaking change for legacy compatibility
+        return {
+            "explanation": "Legacy method - use judge_evaluate or evaluate_all instead",
+            "score": 3,
+            "error": "This method requires reference_answer in the new judge approach"
+        }
+
+    def evaluate_groundedness(self, generated_answer: str, context: str) -> Dict[str, Any]:
+        """Legacy method - now uses judge evaluation (requires question and reference)"""
+        # Note: This method now requires question and reference_answer, breaking change for legacy compatibility
+        return {
+            "explanation": "Legacy method - use judge_evaluate or evaluate_all instead",
+            "score": 3,
+            "error": "This method requires question and reference_answer in the new judge approach"
+        }
+
+    def evaluate_retrieval_relevance(self, question: str, context: str) -> Dict[str, Any]:
+        """Legacy method - now uses judge evaluation (requires reference answer)"""
+        # Note: This method now requires reference_answer, breaking change for legacy compatibility
+        return {
+            "explanation": "Legacy method - use judge_evaluate or evaluate_all instead",
+            "score": 3,
+            "error": "This method requires reference_answer in the new judge approach"
+        }
 
 # Backward compatibility alias
 Langchain_Eval_Pipeline = LangchainEvalPipeline

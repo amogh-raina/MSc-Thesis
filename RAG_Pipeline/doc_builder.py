@@ -1,6 +1,32 @@
 """
 Convert a P2P dataframe into LangChain Documents with enhanced grounding.
 
+Document Building Strategy Comparison:
+=====================================
+
+1. build_paragraph_docs() - Full Citation Format
+   - Format: (#CELEX:PARA) [TITLE] TEXT  
+   - Creates 2 docs per row (citing + cited)
+   - Rich metadata + embedded identifiers
+   - Best for: Citation analysis, full legal context
+
+2. build_case_paragraph_docs() - Case-Centric Format
+   - Format: [TITLE]\nTEXT
+   - Creates 1 doc per unique (celex, para) pair
+   - CELEX only in metadata 
+   - Best for: General legal Q&A, content search
+
+3. build_optimized_legal_docs() - Flexible Hybrid (RECOMMENDED)
+   - Format: Configurable ([TITLE] (#CELEX:PARA) TEXT)
+   - Creates 1 doc per unique (celex, para) pair
+   - CELEX embedded in content + rich metadata
+   - Best for: RAG systems needing both search and citation
+
+Choose based on your use case:
+- Need exact citations in answers? → build_optimized_legal_docs with CELEX embedding
+- Pure semantic search? → build_case_paragraph_docs  
+- Full citation analysis? → build_paragraph_docs
+
 - Always uses the 'standard' format: (#CELEX:PARA) [TITLE] TEXT
 - Filters empty rows to prevent bloat
 - Embeds identifiers directly in page_content for stronger LLM grounding
@@ -31,7 +57,6 @@ _DEFAULT_CITING = {
     "para": "NUMBER_FROM",
     "title": "TITLE_FROM",
     "date": "DATE_FROM",
-    "subject": "subject_matter",
 }
 
 _DEFAULT_CITED = {
@@ -40,7 +65,6 @@ _DEFAULT_CITED = {
     "para": "NUMBER_TO",
     "title": "TITLE_TO",
     "date": "DATE_TO",
-    "subject": "subject_matter",
 }
 
 # --------------------------------------------------------------------- #
@@ -266,4 +290,102 @@ def build_case_paragraph_docs(
                     "date": date,
                 }
             ))
+    return docs
+
+# --------------------------------------------------------------------- #
+# Optimized document building for legal RAG
+# --------------------------------------------------------------------- #
+def build_optimized_legal_docs(
+    df: pd.DataFrame,
+    citing_cols: Dict[str, str] | None = None,
+    cited_cols: Dict[str, str] | None = None,
+    filter_empty: bool = True,
+    include_celex_in_content: bool = True,
+    format_style: str = "legal_standard"  # "legal_standard", "enhanced", "minimal"
+) -> List[Document]:
+    """
+    Build optimized documents for legal RAG with CELEX embedding options.
+    
+    This function provides the best balance of:
+    - Semantic searchability (embeddings work well)
+    - Legal precision (CELEX IDs for exact citation)
+    - Content richness (full context available)
+    - Deduplication (one doc per unique paragraph)
+    
+    Parameters
+    ----------
+    df : pd.DataFrame
+        Source P2P dataframe with citation pairs.
+    citing_cols : dict, optional
+        Column mapping for citing side. 
+    cited_cols : dict, optional
+        Column mapping for cited side.
+    filter_empty : bool, default True
+        Whether to filter out rows with empty text.
+    include_celex_in_content : bool, default True
+        Whether to embed CELEX IDs in the page content for LLM access.
+    format_style : str, default "legal_standard"
+        Document formatting style:
+        - "legal_standard": [Title] (#CELEX:PARA) Text
+        - "enhanced": (#CELEX:PARA) [Title] Text  
+        - "minimal": [Title] Text (CELEX in metadata only)
+    
+    Returns
+    -------
+    List[Document]
+        One document per unique (CELEX, paragraph) combination.
+    """
+    citing_cols = {**_DEFAULT_CITING, **(citing_cols or {})}
+    cited_cols = {**_DEFAULT_CITED, **(cited_cols or {})}
+    
+    if filter_empty:
+        original_count = len(df)
+        df = _filter_empty_rows(df, citing_cols["text"], cited_cols["text"])
+        filtered_count = len(df)
+        if original_count > filtered_count:
+            logger.info(f"Filtered {original_count - filtered_count} empty rows, processing {filtered_count} citation pairs")
+    
+    seen = set()
+    docs = []
+    
+    for row in df.itertuples(index=False):
+        # Process both citing and cited sides
+        for side, cols in [("citing", citing_cols), ("cited", cited_cols)]:
+            celex = _row_val(row, cols["celex"])
+            para = _row_val(row, cols["para"])
+            title = _row_val(row, cols["title"])
+            date = _row_val(row, cols.get("date"))
+            text = _row_val(row, cols["text"])
+            
+            # Create unique key and skip if already processed
+            # Key is just (celex, para) - we want one doc per unique paragraph regardless of role
+            key = (celex, para)
+            if celex and para and key not in seen and text.strip():
+                seen.add(key)
+                
+                # Format content based on style
+                if format_style == "legal_standard" and include_celex_in_content:
+                    content = f"[{title}] (#{celex}:{para})\n{text.strip()}"
+                elif format_style == "enhanced" and include_celex_in_content:
+                    content = f"(#{celex}:{para}) [{title}]\n{text.strip()}"
+                else:  # minimal or no celex in content
+                    content = f"[{title}]\n{text.strip()}"
+                
+                # Rich metadata for all approaches
+                metadata = {
+                    "celex": celex,
+                    "para_no": para,
+                    "case_title": title,
+                    "date": date,
+                    "role": side,
+                    "content_format": format_style,
+                    "has_celex_in_content": include_celex_in_content
+                }
+                
+                docs.append(Document(
+                    page_content=content,
+                    metadata=metadata
+                ))
+    
+    logger.info(f"Generated {len(docs)} optimized legal documents from {len(df)} citation pairs")
     return docs
