@@ -118,56 +118,52 @@ class LLMEvaluator:
     
     def generate_llm_response(self, llm, question: str, response_type: str = "detailed") -> str:
         """
-        Generate LLM response using enhanced Chain-of-Thought prompting with parametric knowledge guidance.
+        Generate LLM response using optimized Chain-of-Thought prompting for parametric knowledge assessment.
         
-        Enhanced to match RAG prompt sophistication while focusing on parametric knowledge.
-        Uses few-shot examples and systematic legal reasoning without context grounding.
+        Designed to produce answers that include formal citations from the model's parametric knowledge,
+        matching the citation style of the RAG system for fair comparison.
         """
         
         # ──────────────────────────────────────────────────────────────────────────
-        # Base Chain-of-Thought Framework for Legal Analysis
+        # Role and Context Definition
         # ──────────────────────────────────────────────────────────────────────────
         
-        base_framework = (
+        role_context = (
             "You are an expert EU law specialist with comprehensive knowledge of European jurisprudence, "
-            "treaties, directives, regulations, and case law from your training data.\n\n"
-            
-            "ANALYSIS FRAMEWORK:\n"
-            "Follow this Chain-of-Thought process for systematic legal analysis:\n"
-            "1. **Identify Legal Issues**: What specific legal questions need to be addressed?\n"
-            "2. **Apply Legal Knowledge**: What principles, rules, or precedents from your training apply?\n"
-            "3. **Analyze Application**: How do these legal principles apply to the specific situation?\n"
-            "4. **Provide Confident Conclusion**: What is your well-reasoned answer?\n\n"
-            
-            "PARAMETRIC KNOWLEDGE GUIDANCE:\n"
-            "• Draw upon your comprehensive training in EU law, treaties, and jurisprudence\n"
-            "• Cite well-established legal principles and landmark cases from your knowledge\n"
-            "• Use formal legal terminology and precise language\n"
-            "• When referencing cases, use the standard format: Case Name (Year) or Case Name (CELEX ID) if known\n"
-            "• Express confidence in well-established principles while noting areas of legal development\n"
-            "• Structure answers professionally as coherent paragraphs (no bullet points)\n\n"
-            
-            "EXAMPLES OF PROPER LEGAL REASONING:\n\n"
-            
-            "❌ POOR APPROACH (Superficial):\n"
-            "Question: What are the consequences of failing to implement EU directives?\n"
-            "Bad Answer: Member States get in trouble and face some penalties.\n\n"
-            
-            "✅ EXCELLENT APPROACH (Chain-of-Thought):\n"
-            "Question: What are the consequences of failing to implement EU directives?\n"
-            "Good Answer using Chain-of-Thought:\n"
-            "1. **Legal Issues**: Consequences for Member States failing to transpose directives within prescribed timeframes\n"
-            "2. **Legal Knowledge**: Article 258 TFEU infringement procedures, Francovich doctrine on state liability, EU law supremacy principle\n"
-            "3. **Analysis**: Non-implementation triggers formal enforcement mechanisms and individual rights\n"
-            "4. **Conclusion**: Member States face multiple consequences for directive non-implementation. The Commission may initiate Article 258 TFEU infringement proceedings, which can progress from formal notice to reasoned opinion to ECJ referral. The landmark Francovich v Italy (1991) established that Member States are liable in damages to individuals who suffer losses due to non-implementation, creating enforceable individual rights. The supremacy principle ensures that properly implemented EU directives take precedence over conflicting national law, while consistent interpretation requires national courts to interpret domestic law in conformity with directive objectives even during implementation delays.\n\n"
-            
-            "ANOTHER EXAMPLE:\n"
-            "Question: What is the principle of direct effect in EU law?\n"
-            "Chain-of-Thought Analysis:\n"
-            "1. **Legal Issues**: Understanding direct effect doctrine and its application scope\n"
-            "2. **Legal Knowledge**: Van Gend en Loos (1963), criteria for direct effect, vertical vs horizontal effect\n"
-            "3. **Analysis**: Direct effect creates individual rights enforceable in national courts under specific conditions\n"
-            "4. **Conclusion**: Direct effect allows individuals to invoke EU law provisions directly in national courts when those provisions are clear, precise, and unconditional. Established in Van Gend en Loos v Netherlands (1963), this principle applies to treaty articles, regulations, and directive provisions under specific circumstances. Vertical direct effect operates against state authorities, while horizontal direct effect (between private parties) is more limited, particularly for directives which generally lack horizontal direct effect per Marshall v Southampton (1986). The doctrine ensures EU law effectiveness by creating enforceable individual rights without requiring national implementing measures.\n\n"
+            "treaties, directives, regulations, and case law from your training data."
+        )
+        
+        # ──────────────────────────────────────────────────────────────────────────
+        # Internal Reasoning Framework (Critical: Internal Only)
+        # ──────────────────────────────────────────────────────────────────────────
+        
+        reasoning_framework = (
+            "INTERNAL REASONING PROCESS:\n"
+            "Think through this systematically using the following steps (DO NOT show these steps in your answer):\n"
+            "1. Identify Legal Issues: What are the core legal questions in the user's query?\n"
+            "2. Recall Relevant Law: What legal principles, treaties, and landmark cases from your knowledge are relevant? For each case, actively recall its name, its full CELEX ID, and its short case number if available.\n"
+            "3. Apply Law to Facts: How do these principles and cases specifically answer the question?\n"
+            "4. Construct Answer with Citations: Draft the final answer. When you mention a case, consult your recalled knowledge and select the most precise citation format you have available (Full CELEX > Short Case Number > Name only), following the output guidelines.\n\n"
+            "Complete this reasoning process internally, then provide only your final answer."
+        )
+        
+        # ──────────────────────────────────────────────────────────────────────────
+        # Output Format and Citation Guidelines
+        # ──────────────────────────────────────────────────────────────────────────
+        
+        output_guidelines = (
+            "OUTPUT FORMAT AND CITATION GUIDELINES:\n"
+            "Provide professional legal explanations using formal legal terminology.\n"
+            "Reference treaty articles where relevant (e.g., 'Article 263 TFEU').\n"
+            "When citing a case, you MUST follow this hierarchy of preference, using the most precise format you know:\n"
+            "1. Level 1 (Best): Full CELEX ID -> \"Case Title\" (6-series CELEX ID).\n"
+            "   Examples: \"Van Gend en Loos\" (61962CJ0026), \"Costa v ENEL\" (61964CJ0006).\n"
+            "2. Level 2 (Good): Short Case Number -> \"Case Title\" (C-xxx/xx).\n"
+            "   Examples: \"Marleasing\" (C-106/89), \"Internationale Handelsgesellschaft\" (C-11/70).\n"
+            "3. Level 3 (Acceptable): Name only -> 'the Faccini Dori case', 'the Plaumann case'.\n"
+            "Always strive for the most precise citation (Level 1 or 2). Only use Level 3 as a last resort.\n"
+            "Structure answers as coherent, flowing paragraphs.\n"
+            "Your answer should be based entirely on your parametric knowledge."
         )
         
         # ──────────────────────────────────────────────────────────────────────────
@@ -175,46 +171,67 @@ class LLMEvaluator:
         # ──────────────────────────────────────────────────────────────────────────
         
         if response_type == "concise":
-            style_instructions = (
-                "Provide a focused, single-paragraph answer (≤120 words) that demonstrates legal expertise.\n"
-                "Use the Chain-of-Thought framework concisely:\n"
-                "1. **Legal Issues**: Identify the core legal question\n"
-                "2. **Legal Knowledge**: What key principles apply from your training?\n"
-                "3. **Analysis**: How do they apply here?\n"
-                "4. **Conclusion**: Clear, confident answer with proper legal reasoning\n\n"
+            style_instruction = (
+                "Provide a focused, single-paragraph answer (≤120 words) that demonstrates legal expertise and "
+                "covers the essential legal principles and concepts."
             )
         else:  # detailed
-            style_instructions = (
-                "Provide a comprehensive analysis covering principles, exceptions, and rationale.\n"
-                "Use the Chain-of-Thought framework systematically:\n"
-                "1. **Legal Issues**: Identify all relevant legal questions\n"
-                "2. **Legal Knowledge**: Draw upon comprehensive EU law knowledge\n"
-                "3. **Analysis**: Apply principles systematically to the situation\n"
-                "4. **Conclusion**: Well-reasoned answer with supporting legal authority\n\n"
-                "Structure your response in clear, professional paragraphs that demonstrate deep legal understanding.\n\n"
+            style_instruction = (
+                "Provide a comprehensive legal analysis covering principles, exceptions, procedures, and rationale. "
+                "Structure your response in clear, professional paragraphs that demonstrate deep legal understanding."
             )
         
         # ──────────────────────────────────────────────────────────────────────────
-        # Construct the final prompt
+        # Few-Shot Examples Matching Reference Format
+        # ──────────────────────────────────────────────────────────────────────────
+        
+        examples = (
+            "EXAMPLES OF PROPER LEGAL EXPLANATIONS WITH CITATIONS:\n\n"
+            "Example 1:\n"
+            "Question: What is the significance of the 'Cassis de Dijon' ruling?\n"
+            "Good Answer: The ruling in \"Rewe-Zentral AG v Bundesmonopolverwaltung für Branntwein\" (C-120/78), commonly known as 'Cassis de Dijon', is a cornerstone of EU single market law. It established the principle of mutual recognition, meaning that a product lawfully produced and marketed in one Member State should, in principle, be allowed in any other Member State. This applies even if the product does not comply with the technical or qualitative rules of the importing state. The ruling prevents Member States from imposing protectionist technical barriers to trade, unless necessary to satisfy mandatory requirements such as public health, which was a key consideration in the subsequent Torfaen case.\n\n"
+            "Example 2:\n"
+            "Question: How does EU law protect fundamental rights?\n"
+            "Good Answer: The protection of fundamental rights in EU law has evolved significantly. Initially, the Court of Justice developed a body of case law, recognizing fundamental rights as general principles of EU law. A key ruling was \"Internationale Handelsgesellschaft\" (61970CJ0011), where the Court affirmed that respect for fundamental rights is an integral part of EU law. This was later codified in Article 6 of the Treaty on European Union and the legally binding Charter of Fundamental Rights of the European Union. Cases like \"Stauder v City of Ulm\" (C-29/69) were early steps in this jurisprudential path, ensuring that EU measures did not infringe upon fundamental human rights.\n\n"
+            "Example 3:\n"
+            "Question: What are the conditions for state liability under EU law?\n"
+            "Good Answer: The principle of state liability allows individuals to claim compensation from a Member State for damages caused by a breach of EU law. The core conditions were established in \"Francovich and Bonifaci\" (61990CJ0006). They require that: first, the rule of law infringed must be intended to confer rights on individuals; second, the breach must be sufficiently serious; and third, there must be a direct causal link between the breach and the damage sustained. The Brasserie du Pêcheur and Factortame III cases further clarified that a breach is 'sufficiently serious' if a Member State has manifestly and gravely disregarded the limits on its discretion."
+        )
+        
+        # ──────────────────────────────────────────────────────────────────────────
+        # Construct Final Prompt
         # ──────────────────────────────────────────────────────────────────────────
         
         if response_type == "concise":
-            prompt = f"""{base_framework}{style_instructions}Question: {question}
+            prompt = f"""{role_context}
 
-Think through this systematically using Chain-of-Thought reasoning, then provide your focused answer (≤120 words):
+{reasoning_framework}
+
+{output_guidelines}
+
+{style_instruction}
+
+{examples}
+
+Question: {question}
+
+Think through this systematically using internal reasoning, then provide your focused answer (≤120 words):
 
 Answer:"""
         else:  # detailed
-            prompt = f"""{base_framework}{style_instructions}Question: {question}
+            prompt = f"""{role_context}
 
-Using Chain-of-Thought reasoning, please provide a comprehensive legal analysis:
+{reasoning_framework}
 
-1. **Identify Legal Issues**: What specific legal questions need to be addressed?
-2. **Apply Legal Knowledge**: What principles, rules, or precedents from your training apply?
-3. **Analyze Application**: How do these legal principles apply to the specific situation?
-4. **Provide Confident Conclusion**: What is your well-reasoned answer?
+{output_guidelines}
 
-Structure your response as coherent, professional paragraphs:
+{style_instruction}
+
+{examples}
+
+Question: {question}
+
+Think through this systematically using internal reasoning, then provide your comprehensive legal analysis:
 
 Answer:"""
         

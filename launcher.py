@@ -97,6 +97,12 @@ def system_definitions():
             "file": "GraphRAG_Pipeline/ui/GraphRAG_ui.py",
             "features": ["Knowledge graph integration", "3 retrieval variants", "Authority scoring", "LangChain reranking"],
             "status": "✅ Available"
+        },
+        "⚖️ Judge Agent": {
+            "description": "Autonomous legal answer evaluation with web search capability.",
+            "file": "Judge_Agent/ui/Judge_ui.py",
+            "features": ["ReAct agent pattern", "Multi-provider LLM support", "Autonomous web search", "Rubric-based evaluation"],
+            "status": "✅ Available"
         }
     }
     
@@ -117,7 +123,7 @@ def system_definitions():
                     st.error(f"File not found: {system_info['file']}")
 
             with col2:
-                system_key = system_name.split()[0].lower().replace("🧠", "llm").replace("🔍", "rag").replace("🕸️", "graphrag").replace("🔬", "demo")
+                system_key = system_name.split()[0].lower().replace("🧠", "llm").replace("🔍", "rag").replace("🕸️", "graphrag").replace("⚖️", "judge").replace("🔬", "demo")
                 
                 if file_path.exists():
                     if st.button(f"🚀 Launch", key=f"launch_{system_key}", type="primary"):
@@ -136,12 +142,15 @@ def additional_information():
         - Set up your API keys in a `.env` file.
         - Prepare your question bank data (JSON files in `LLM-Only/ui/JSON Trial 1/`)
         - For RAG: Prepare your document datasets (CSV format).
+        - For Judge Agent: Prepare evaluation data (CSV/Excel with question, reference_answer, generated_answer columns).
         """)
         st.info("""
         **Shared components are located in the `Main/` folder:**
         - `core/`: Model management, evaluation logic, question bank
         - `config/`: Global configuration settings  
         - `utils/`: Custom LLM implementations and utilities
+        
+        **Judge Agent** uses LangGraph's `create_react_agent` with ModelManager for autonomous legal evaluation with optional web search.
         """)
 
 def launch_system(app_file: str, system_name: str):

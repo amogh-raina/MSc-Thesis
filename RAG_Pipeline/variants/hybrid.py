@@ -66,7 +66,7 @@ class HybridRAGPipeline(RAGPipeline):
         use_reranking: bool = False,
         rerank_type: str = "bge",  # "bge", "jina", or "cohere"
         rerank_model: str = "BAAI/bge-reranker-base",
-        rerank_top_n: int = 10,
+        rerank_top_n: int = 15,
         **kwargs
     ):
         """
@@ -349,7 +349,7 @@ def create_large_hybrid_dataset_pipeline(
     col_map: Optional[Dict] = None,
     doc_format_style: str = "legal_standard",
     include_celex_in_content: bool = True,
-    k: int = 10,
+    k: int = 15,
     # Hybrid parameters
     bm25_weight: float = 0.3,
     vector_weight: float = 0.7,

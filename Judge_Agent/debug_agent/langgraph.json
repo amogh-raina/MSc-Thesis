@@ -1,0 +1,7 @@
+{
+    "dependencies": ["."],
+    "graphs": {
+        "debug_judge_agent": "./debug_workflow.py:workflow"
+    },
+    "env": "../../.env"
+} 

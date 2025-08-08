@@ -1,0 +1,81 @@
+{
+  "metadata": {
+    "timestamp": "2025-01-02T14:30:45.123456",
+    "input_file": "legal_questions.csv",
+    "llm_provider": "NVIDIA",
+    "llm_model": "meta/llama-3.3-70b-instruct",
+    "total_evaluations": 3,
+    "web_search_available": true
+  },
+  "evaluations": [
+    {
+      "trio_index": 0,
+      "question": "What is the principle of subsidiarity in EU law?",
+      "scores": {
+        "accuracy": 4,
+        "accuracy_reason": "Covers main aspects with minor technical gaps",
+        "completeness": 3,
+        "completeness_reason": "Missing some nuanced details about implementation",
+        "relevance": 5,
+        "relevance_reason": "Directly addresses the question with focused content",
+        "overall": 4,
+        "overall_reason": "Strong response with room for minor improvements"
+      },
+      "web_search_used": true,
+      "search_results": "[ToolMessage(content='{\"answer\":\"Subsidiarity is a principle of EU law...\",\"results\":[...]}', name='web_search', tool_call_id='call_123')]",
+      "llm_provider": "NVIDIA",
+      "llm_model": "meta/llama-3.3-70b-instruct",
+      "timestamp": "2025-01-02T14:30:45.123456"
+    },
+    {
+      "trio_index": 1,
+      "question": "Explain the direct effect doctrine in EU law.",
+      "scores": {
+        "accuracy": 5,
+        "accuracy_reason": "Perfectly accurate legal explanation with correct citations",
+        "completeness": 4,
+        "completeness_reason": "Comprehensive coverage with minor omissions",
+        "relevance": 5,
+        "relevance_reason": "Entirely on topic and well-structured",
+        "overall": 5,
+        "overall_reason": "Excellent response meeting all criteria"
+      },
+      "web_search_used": false,
+      "search_results": null,
+      "llm_provider": "NVIDIA",
+      "llm_model": "meta/llama-3.3-70b-instruct",
+      "timestamp": "2025-01-02T14:31:02.456789"
+    },
+    {
+      "trio_index": 2,
+      "question": "What are the requirements for state liability under Francovich?",
+      "scores": {
+        "accuracy": 3,
+        "accuracy_reason": "Generally correct but some imprecise legal terminology",
+        "completeness": 2,
+        "completeness_reason": "Missing key requirements and case law details",
+        "relevance": 4,
+        "relevance_reason": "Relevant but includes some tangential discussion",
+        "overall": 3,
+        "overall_reason": "Adequate but needs improvement in completeness and precision"
+      },
+      "web_search_used": true,
+      "search_results": "[ToolMessage(content='{\"answer\":\"Francovich doctrine establishes...\",\"results\":[...]}', name='web_search', tool_call_id='call_456')]",
+      "llm_provider": "NVIDIA",
+      "llm_model": "meta/llama-3.3-70b-instruct",
+      "timestamp": "2025-01-02T14:31:18.789012"
+    }
+  ],
+  "summary": {
+    "successful": 3,
+    "errors": 0,
+    "average_scores": {
+      "accuracy": 4.0,
+      "completeness": 3.0,
+      "relevance": 4.667,
+      "overall": 4.0
+    },
+    "web_searches_used": 2,
+    "web_search_rate": 0.667
+  }
+} 

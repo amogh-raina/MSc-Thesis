@@ -541,6 +541,12 @@ def manual_rag_evaluation_interface(selected_llm_provider, selected_llm_model, r
                 # Generate RAG answer with smart retrieval
                 llm = ModelManager.create_llm(selected_llm_provider, selected_llm_model)
                 
+                # Check if LLM creation was successful
+                if llm is None:
+                    st.error("❌ Failed to create LLM model. Please check the model availability and try again.")
+                    st.info("💡 **Tip:** The selected model may be temporarily unavailable. Try a different model or check the service status.")
+                    return
+                
                 # Get target k from RAG config
                 target_k = st.session_state.get("rag_config", {}).get("k_value", 10)
                 
@@ -734,6 +740,12 @@ def batch_rag_evaluation_interface(selected_llm_provider, selected_llm_model, re
                 
                 # Prepare for batch RAG evaluation with smart retrieval
                 llm = ModelManager.create_llm(selected_llm_provider, selected_llm_model)
+                
+                # Check if LLM creation was successful
+                if llm is None:
+                    st.error("❌ Failed to create LLM model for batch evaluation. Please check the model availability and try again.")
+                    st.info("💡 **Tip:** The selected model may be temporarily unavailable. Try a different model or check the service status.")
+                    return
                 
                 # Get target k from RAG config
                 target_k = st.session_state.get("rag_config", {}).get("k_value", 10)
@@ -997,7 +1009,8 @@ def run_langchain_rag_evaluation(results: List[Dict]) -> List[Dict]:
         # Create evaluation LLM
         eval_llm = ModelManager.create_llm(eval_provider, eval_model)
         if not eval_llm:
-            st.error("Failed to create evaluation LLM")
+            st.error(f"❌ Failed to create LangChain evaluation LLM ({eval_provider}/{eval_model})")
+            st.warning("💡 **LangChain Evaluation Skipped:** The evaluation LLM could not be created. Check the model availability.")
             return results
         
         # Initialize evaluation pipeline
@@ -1081,7 +1094,8 @@ def run_ragas_rag_evaluation(results: List[Dict]) -> List[Dict]:
         # Create evaluation LLM
         eval_llm = ModelManager.create_llm(ragas_provider, ragas_model)
         if not eval_llm:
-            st.error("Failed to create RAGAS evaluation LLM")
+            st.error(f"❌ Failed to create RAGAS evaluation LLM ({ragas_provider}/{ragas_model})")
+            st.warning("💡 **RAGAS Evaluation Skipped:** The evaluation LLM could not be created. Check the model availability.")
             return results
         
         # Create embeddings model if enabled

@@ -4,12 +4,15 @@ Houses custom LLM classes and wrappers
 """
 from __future__ import annotations
 import os
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Union, Callable, Type
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
 from langchain.schema import ChatGeneration, ChatResult
 from langchain_core.callbacks import CallbackManagerForLLMRun
-from pydantic import Field
+from pydantic import BaseModel, Field
+from langchain_core.runnables import Runnable
+from langchain_core.tools import BaseTool
+from langchain_core.utils.function_calling import convert_to_openai_tool
 
 try:
     from azure.ai.inference import ChatCompletionsClient, EmbeddingsClient
@@ -326,3 +329,4 @@ class AzureAIInferenceEmbeddings:
     
     def __repr__(self):
         return f"<AzureAIInferenceEmbeddings model={self.model_name!r} endpoint={self.endpoint!r}>"
+
